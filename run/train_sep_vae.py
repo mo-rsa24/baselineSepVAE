@@ -16,8 +16,13 @@ Loss stack (two separate optimizers):
     L_disc = BCE(D(z_c, z_ca), joint=1) + BCE(D(z_c, z_ca[perm]), marginal=0)
 """
 
-import argparse
 import os
+# Must be set before JAX/XLA initialises — suppresses C++ WARNING-level logs
+os.environ.setdefault('TF_CPP_MIN_LOG_LEVEL',    '3')   # silence XLA/TF C++ warnings
+os.environ.setdefault('TF_GPU_ALLOCATOR', 'cuda_malloc_async')  # async alloc reduces fragmentation
+os.environ.setdefault('GLOG_minloglevel',         '3')   # silence glog warnings (hlo, bfc_allocator)
+
+import argparse
 from datetime import datetime
 from pathlib import Path
 
@@ -82,6 +87,9 @@ def parse_args():
     # Optimizers
     p.add_argument("--lr_vae",       type=float, default=1e-4,
                    help="AdamW learning rate for the VAE (encoder branches + heads + decoder).")
+    p.add_argument("--lr_backbone",  type=float, default=1e-5,
+                   help="AdamW learning rate for the CheSS trunk (layers 1-3). "
+                        "Lower than lr_vae to avoid destroying pretrained features.")
     p.add_argument("--lr_disc",      type=float, default=1e-4,
                    help="Adam learning rate for the FactorVAE discriminator.")
     p.add_argument("--weight_decay", type=float, default=1e-4)
@@ -464,9 +472,32 @@ def main():
         print(f"Bbox attention supervision: enabled (weight={args.weight_bbox_attn})")
 
     # ── Optimizers ────────────────────────────────────────────────────────────
+    # Backbone (layers 1-3) gets a 10× lower LR than the rest of the VAE so
+    # it adapts slowly toward a more VAE-compatible representation without
+    # destroying the pretrained CheSS features.
+    from flax import traverse_util
+
+    def _vae_label_fn(params):
+        """Label backbone params 'backbone', everything else 'vae'."""
+        flat = traverse_util.flatten_dict(params)
+        labels = {
+            k: 'backbone' if k[0] == 'encoder' and len(k) > 1 and k[1] == 'backbone'
+               else 'vae'
+            for k in flat
+        }
+        return traverse_util.unflatten_dict(labels)
+
     tx_vae = optax.chain(
         optax.clip_by_global_norm(args.grad_clip),
-        optax.adamw(learning_rate=args.lr_vae, weight_decay=args.weight_decay),
+        optax.multi_transform(
+            transforms={
+                'backbone': optax.adamw(learning_rate=args.lr_backbone,
+                                        weight_decay=args.weight_decay),
+                'vae':      optax.adamw(learning_rate=args.lr_vae,
+                                        weight_decay=args.weight_decay),
+            },
+            param_labels=_vae_label_fn,
+        ),
     )
     tx_disc = optax.chain(
         optax.clip_by_global_norm(args.grad_clip),
@@ -475,7 +506,7 @@ def main():
     vae_state  = TrainState.create(apply_fn=None, params=vae_params,  tx=tx_vae)
     disc_state = TrainState.create(apply_fn=None, params=disc_params, tx=tx_disc)
     ema_params = jax.tree_util.tree_map(jnp.array, vae_params)
-    print(f"VAE optimizer:  AdamW (lr={args.lr_vae}, wd={args.weight_decay})")
+    print(f"VAE optimizer:  AdamW backbone_lr={args.lr_backbone}  vae_lr={args.lr_vae}  wd={args.weight_decay}")
     print(f"Disc optimizer: Adam  (lr={args.lr_disc})")
 
     # ── Resume ────────────────────────────────────────────────────────────────
@@ -550,9 +581,12 @@ def main():
 
     @jax.jit
     def vae_step(vae_state_arg, batch, disc_params_frozen, key, kl_anneal):
-        """Update VAE with all losses including FactorVAE MI (disc frozen)."""
+        """Update VAE with all losses including FactorVAE MI (disc frozen).
+        Also returns z_c_pooled/z_ca_pooled so the caller can feed them to the
+        *next* disc_step without a second encoder forward pass (one step stale,
+        which is standard FactorVAE practice and has no meaningful effect)."""
         def loss_fn(params):
-            return sepvae_loss(
+            total_loss, logs, z_c, z_ca = sepvae_loss(
                 sepvae, params, batch, key, loss_cfg,
                 batch_stats=vae_batch_stats,
                 kl_anneal=kl_anneal,
@@ -561,8 +595,11 @@ def main():
                 backbone_apply_fn=_backbone_apply_fn,
                 backbone_variables=_backbone_vars,
             )
-        (loss, logs), grads = jax.value_and_grad(loss_fn, has_aux=True)(vae_state_arg.params)
-        return vae_state_arg.apply_gradients(grads=grads), logs
+            return total_loss, (logs, z_c, z_ca)
+        (loss, (logs, z_c, z_ca)), grads = jax.value_and_grad(loss_fn, has_aux=True)(
+            vae_state_arg.params
+        )
+        return vae_state_arg.apply_gradients(grads=grads), logs, z_c, z_ca
 
     @jax.jit
     def reconstruct_and_encode(vae_params_arg, x, labels, key):
@@ -577,6 +614,15 @@ def main():
     print("\n" + "=" * 60)
     print("TRAINING" + (f" (resuming from epoch {start_epoch})" if start_epoch > 1 else ""))
     print("=" * 60)
+
+    # Warm up stale latents with one encoder pass before the loop starts.
+    # After that, vae_step returns fresh latents for the next disc update,
+    # eliminating the redundant get_pooled_latents call every step.
+    _init_x = jnp.concatenate([
+        jnp.zeros((args.batch_size, args.img_size, args.img_size, 1)),
+        jnp.zeros((args.batch_size, args.img_size, args.img_size, 1)),
+    ], axis=0)
+    z_c_stale, z_ca_stale = get_pooled_latents(vae_state.params, _init_x)
 
     for epoch in range(start_epoch, args.epochs + 1):
         kl_anneal = jnp.float32(
@@ -598,16 +644,17 @@ def main():
 
             rng, key_disc, key_vae = jax.random.split(rng, 3)
 
-            # Step 1: build (2B, H, W, 1) input for encoder
-            x_full = jnp.concatenate([batch['x_norm'], batch['x_disease1']], axis=0)
+            # Step 1: discriminator update using latents from the previous VAE step.
+            # One step stale — standard FactorVAE practice, negligible effect.
+            disc_state, disc_loss, disc_acc = disc_step(
+                disc_state, z_c_stale, z_ca_stale, key_disc
+            )
 
-            # Step 2: discriminator update (VAE frozen)
-            z_c_sg, z_ca_sg = get_pooled_latents(vae_state.params, x_full)
-            disc_state, disc_loss, disc_acc = disc_step(disc_state, z_c_sg, z_ca_sg, key_disc)
-
-            # Step 3: VAE update (disc frozen via stop_gradient in sepvae_loss call site)
+            # Step 2: VAE update (disc frozen); returns fresh latents for next disc step.
             disc_params_frozen = jax.lax.stop_gradient(disc_state.params)
-            vae_state, logs = vae_step(vae_state, batch, disc_params_frozen, key_vae, kl_anneal)
+            vae_state, logs, z_c_stale, z_ca_stale = vae_step(
+                vae_state, batch, disc_params_frozen, key_vae, kl_anneal
+            )
 
             if args.ema_decay > 0:
                 ema_params = update_ema(ema_params, vae_state.params, args.ema_decay)

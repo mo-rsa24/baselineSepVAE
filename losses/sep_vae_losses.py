@@ -306,7 +306,7 @@ def sepvae_loss(
     discriminator: Optional[nn.Module] = None,
     backbone_apply_fn=None,
     backbone_variables: Dict = None,
-) -> Tuple[jnp.ndarray, Dict]:
+) -> Tuple[jnp.ndarray, Dict, jnp.ndarray, jnp.ndarray]:
     """
     Binary SepVAE VAE loss (discriminator is frozen via stop_gradient at call site).
 
@@ -400,4 +400,4 @@ def sepvae_loss(
         'loss/bbox_attn':       l_bbox,
         'loss/perceptual':      l_perceptual,
     }
-    return total_loss, logs
+    return total_loss, logs, z_c_pooled, z_ca_pooled

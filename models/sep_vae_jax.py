@@ -154,14 +154,17 @@ class SepVAEEncoder(nn.Module):
         )
 
     def __call__(self, x, train: bool = True):
-        # ── Frozen trunk (layers 1-3) ─────────────────────────────────────────
-        h_shared = self.backbone(x, stop_at_layer3=True)   # (B, 32, 32, 1024)
-        h_shared = jax.lax.stop_gradient(h_shared)
+        # ── Trunk (layers 1-3) — fine-tuned at backbone_lr (1e-5) ───────────────
+        # jax.checkpoint recomputes activations during backward instead of
+        # storing them, keeping memory proportional to I/O rather than depth.
+        h_shared = jax.checkpoint(
+            lambda x: self.backbone(x, stop_at_layer3=True)
+        )(x)   # (B, 32, 32, 1024)
 
         # ── Learnable layer4 branches ─────────────────────────────────────────
         B = h_shared.shape[0]
-        h_bg = self.bg_branch(h_shared)   # (B, 16, 16, 2048)
-        h_tg = self.tg_branch(h_shared)   # (B, 16, 16, 2048)
+        h_bg = jax.checkpoint(lambda h: self.bg_branch(h))(h_shared)   # (B, 16, 16, 2048)
+        h_tg = jax.checkpoint(lambda h: self.tg_branch(h))(h_shared)   # (B, 16, 16, 2048)
 
         # Upsample to 64×64 (same spatial resolution as original design)
         h_bg = jax.image.resize(h_bg, (B, 64, 64, 2048), method='bilinear')

@@ -314,9 +314,10 @@ python run/train_sep_vae.py \
     --csv_path         /workspace/vinbigdata/cache_npy/train_filtered.csv \
     --use_cache \
     --chess_checkpoint /workspace/chess/pretrained_weights.pth.tar \
-    --batch_size       4 \
+    --batch_size       8 \
     --epochs           2 \
-    --num_workers      4 \
+    --num_workers      8 \
+    --lr_backbone      1e-5 \
     --lr_disc          1e-4 \
     --sample_every     1 \
     --manifold_every   -1 \
@@ -352,6 +353,7 @@ python run/train_sep_vae.py \
     --weight_mi_factor      0.0 \
     --weight_bbox_attn      0.0 \
     --weight_perceptual     0.0 \
+    --lr_backbone      1e-5 \
     --lr_disc          1e-4 \
     --sample_every     5 \
     --manifold_every   10 \
@@ -388,6 +390,7 @@ python run/train_sep_vae.py \
     --weight_mi_factor      1.0 \
     --weight_bbox_attn      0.0 \
     --weight_perceptual     0.0 \
+    --lr_backbone      1e-5 \
     --lr_disc          1e-4 \
     --resume           /workspace/runs_sepvae/c1_recon_baseline/checkpoint_final.pkl \
     --sample_every     5 \
@@ -425,6 +428,7 @@ python run/train_sep_vae.py \
     --weight_mi_factor      1.0 \
     --weight_bbox_attn      0.2 \
     --weight_perceptual     0.0 \
+    --lr_backbone      1e-5 \
     --lr_disc          1e-4 \
     --resume           /workspace/runs_sepvae/c2_mi_disc/checkpoint_final.pkl \
     --sample_every     5 \
@@ -462,6 +466,7 @@ python run/train_sep_vae.py \
     --weight_mi_factor      1.0 \
     --weight_bbox_attn      0.2 \
     --weight_perceptual     0.05 \
+    --lr_backbone      1e-5 \
     --lr_disc          1e-4 \
     --resume           /workspace/runs_sepvae/c3_bbox_attn/checkpoint_final.pkl \
     --sample_every     5 \
@@ -505,6 +510,7 @@ python run/train_sep_vae.py \
     --weight_mi_factor      1.0 \
     --weight_bbox_attn      0.2 \
     --weight_perceptual     0.05 \
+    --lr_backbone      1e-5 \
     --lr_disc          1e-4 \
     --resume           /workspace/runs_sepvae/c4_perceptual/checkpoint_final.pkl \
     --sample_every     5 \
@@ -525,19 +531,26 @@ MI discriminator accuracy ≤ 0.55 for (z_cardio, z_plthick) pair.
 
 ### Note 1 — KL catastrophically high (> 100k at step 0)
 The frozen CheSS backbone produces discriminative features incompatible with N(0, I).
-Fix: partially unfreeze the backbone with differential LR:
-- In `models/sep_vae_jax.py`, remove `jax.lax.stop_gradient(h)` from the backbone forward pass.
-- Use backbone LR = 1e-5, encoder-head LR = 1e-4 (split param groups in optimizer).
+**This fix is now baked into the codebase:**
+- `stop_gradient` is removed from the backbone output in `models/sep_vae_jax.py`
+- `--lr_backbone 1e-5` (10× lower than `--lr_vae`) is used in all phase commands
+- The optimizer uses `optax.multi_transform` to apply the differential LR automatically
+If KL is still > 20k at epoch 5, try `--lr_backbone 3e-5`.
 
 ### Note 2 — Scaling batch size on the A100 80 GB
-| batch_size | VRAM est. (512×512) | feasible? |
-|---|---|---|
-| 4  | ~8 GB  | yes |
-| 8  | ~15 GB | yes |
-| 16 | ~28 GB | yes |
-| 32 | ~54 GB | yes (borderline with perceptual loss) |
+`jax.value_and_grad` stores all intermediate activations for backprop (~3× forward memory).
 
-Start at 8 after smoke test passes; push higher if VRAM headroom allows.
+With backbone **frozen** (`stop_gradient`), backward pass skips layers 1-3 — cheaper.
+With backbone **unfrozen** (current), backward pass covers full ResNet50 — ~2× more memory.
+
+| batch_size | frozen grads | unfrozen grads | feasible (unfrozen)? |
+|---|---|---|---|
+| 4  | ~24 GB  | ~40 GB  | yes |
+| 8  | ~45 GB  | ~65 GB  | yes — **default** |
+| 16 | ~84 GB  | ~130 GB | OOM |
+| 32 | ~160 GB | OOM     | OOM |
+
+Use **8** as default throughout C1–C5 (backbone is unfrozen from C1 onward).
 
 ### Note 3 — Preserving checkpoints before stopping the pod
 Pod-local storage (`/workspace/runs_sepvae/`) is lost when the pod is stopped.
