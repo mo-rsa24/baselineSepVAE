@@ -1,13 +1,14 @@
 """
-Binary SepVAE training script (Normal vs. Cardiomegaly).
+Binary SepVAE training script — V1 (CheSS backbone) and V2 (ResNet-50 scratch).
 
-z = [z_common(16ch), z_cardio(16ch)]  @ 64×64 spatial
+z = [z_common(16ch), z_cardio(16ch)]  @ 16×16 spatial (V2) / 64×64 (V1)
 
-Architecture:
-  Encoder: frozen CheSS trunk (layers 1-3)
-           + two learnable layer4 branches (bg → z_common, tg → z_cardio)
+Architecture (V2):
+  Encoder: ResNet-50 from scratch + CBAM + self-attn at layer3 bottleneck
+           + two learnable Layer4 branches (bg → z_common, tg → z_cardio)
+           + optional BboxCrossAttnHead (D1+)
   Nulling: hard-zero z_cardio for Normal images before decoding
-  Decoder: progressive bilinear upsampling 64→512
+  Decoder: progressive bilinear upsampling 16→256 with SE-gated ResBlocks
 
 Loss stack (two separate optimizers):
   VAE optimizer:
@@ -18,9 +19,9 @@ Loss stack (two separate optimizers):
 
 import os
 # Must be set before JAX/XLA initialises — suppresses C++ WARNING-level logs
-os.environ.setdefault('TF_CPP_MIN_LOG_LEVEL',    '3')   # silence XLA/TF C++ warnings
-os.environ.setdefault('TF_GPU_ALLOCATOR', 'cuda_malloc_async')  # async alloc reduces fragmentation
-os.environ.setdefault('GLOG_minloglevel',         '3')   # silence glog warnings (hlo, bfc_allocator)
+os.environ.setdefault('TF_CPP_MIN_LOG_LEVEL',    '3')
+os.environ.setdefault('TF_GPU_ALLOCATOR', 'cuda_malloc_async')
+os.environ.setdefault('GLOG_minloglevel',         '3')
 
 import argparse
 from datetime import datetime
@@ -36,13 +37,10 @@ import torch
 from torch.utils.data import DataLoader
 
 from datasets.VinBigData import VinBigDataPairDataset, jax_pair_collate_fn
-from models.sep_vae_jax import SepVAE
-from models.resnet_jax import ResNet50CheSS
 from losses.sep_vae_losses import (
     SepVAELossConfig, sepvae_loss,
     FactorDiscriminator, factor_disc_loss,
 )
-from utils.weight_converter import convert_chess_resnet50, load_converted_weights
 
 try:
     import wandb
@@ -60,15 +58,26 @@ def parse_args():
     p.add_argument("--csv_path",   type=str, default="/datasets/mmolefe/vinbigdata/train.csv")
     p.add_argument("--use_cache",  action="store_true",
                    help="Load pre-cached .npy files instead of raw DICOMs.")
-    p.add_argument("--img_size",   type=int, default=512)
+    p.add_argument("--img_size",   type=int, default=256)
     p.add_argument("--exclude_cross_disease_overlap", action="store_true")
 
-    # Model
-    p.add_argument("--z_channels_common",  type=int,   default=16)
-    p.add_argument("--z_channels_disease", type=int,   default=16)
-    p.add_argument("--attn_query_dim",     type=int,   default=256)
+    # Model version
+    p.add_argument("--model_version",      type=str, default="v2", choices=["v1", "v2"],
+                   help="v1=CheSS backbone; v2=ResNet-50 from scratch + CBAM + SE decoder")
+    p.add_argument("--use_bbox_cross_attn", action="store_true",
+                   help="Enable BboxCrossAttnHead (D1+). D0 uses learned query only.")
+    p.add_argument("--attn_heads",          type=int, default=4,
+                   help="Number of self-attention heads in ResNet-50 bottleneck (V2).")
+    p.add_argument("--perceptual_only",     action="store_true",
+                   help="Use CheSS as frozen perceptual loss extractor only (D4). "
+                        "Does NOT inject CheSS weights into the encoder.")
 
-    # CheSS weights
+    # Model dims
+    p.add_argument("--z_channels_common",  type=int, default=16)
+    p.add_argument("--z_channels_disease", type=int, default=16)
+    p.add_argument("--attn_query_dim",     type=int, default=256)
+
+    # CheSS weights (V1 encoder backbone, or V2 perceptual loss with --perceptual_only)
     p.add_argument("--chess_checkpoint", type=str,
                    default="/datasets/mmolefe/chess/pretrained_weights.pth.tar")
     p.add_argument("--chess_converted",  type=str, default=None)
@@ -77,21 +86,17 @@ def parse_args():
     p.add_argument("--weight_rec",           type=float, default=1.0)
     p.add_argument("--weight_kl_common",     type=float, default=1e-4)
     p.add_argument("--weight_kl_disease",    type=float, default=5e-5)
-    p.add_argument("--weight_mi_factor",     type=float, default=1.0,
-                   help="FactorVAE MI weight κ for the VAE encoder update.")
-    p.add_argument("--weight_bbox_attn",     type=float, default=0.2)
-    p.add_argument("--weight_perceptual",    type=float, default=0.05)
+    p.add_argument("--weight_mi_factor",     type=float, default=1.0)
+    p.add_argument("--weight_bbox_attn",     type=float, default=0.0)
+    p.add_argument("--weight_perceptual",    type=float, default=0.0)
     p.add_argument("--sigma_inactive",       type=float, default=0.1)
     p.add_argument("--kl_warmup_epochs",     type=int,   default=0)
 
     # Optimizers
-    p.add_argument("--lr_vae",       type=float, default=1e-4,
-                   help="AdamW learning rate for the VAE (encoder branches + heads + decoder).")
+    p.add_argument("--lr_vae",       type=float, default=1e-4)
     p.add_argument("--lr_backbone",  type=float, default=1e-5,
-                   help="AdamW learning rate for the CheSS trunk (layers 1-3). "
-                        "Lower than lr_vae to avoid destroying pretrained features.")
-    p.add_argument("--lr_disc",      type=float, default=1e-4,
-                   help="Adam learning rate for the FactorVAE discriminator.")
+                   help="V1 only: CheSS trunk LR (lower than lr_vae).")
+    p.add_argument("--lr_disc",      type=float, default=1e-4)
     p.add_argument("--weight_decay", type=float, default=1e-4)
     p.add_argument("--grad_clip",    type=float, default=1.0)
 
@@ -102,16 +107,16 @@ def parse_args():
     p.add_argument("--seed",         type=int, default=0)
 
     # Logging & checkpoints
-    p.add_argument("--output_root",         type=str, default="runs_sepvae")
-    p.add_argument("--exp_name",            type=str, default="binary_sepvae")
-    p.add_argument("--log_every",           type=int, default=100)
-    p.add_argument("--save_every",          type=int, default=1)
-    p.add_argument("--sample_every",        type=int, default=5)
-    p.add_argument("--n_samples_per_class", type=int, default=4)
-    p.add_argument("--manifold_every",      type=int, default=-1,
+    p.add_argument("--output_root",          type=str, default="runs_sepvae")
+    p.add_argument("--exp_name",             type=str, default="sepvae")
+    p.add_argument("--log_every",            type=int, default=100)
+    p.add_argument("--save_every",           type=int, default=1)
+    p.add_argument("--sample_every",         type=int, default=5)
+    p.add_argument("--n_samples_per_class",  type=int, default=4)
+    p.add_argument("--manifold_every",       type=int, default=-1,
                    help="Manifold plot cadence (-1=match sample_every, 0=disable)")
     p.add_argument("--manifold_max_samples", type=int, default=600)
-    p.add_argument("--manifold_method",     type=str,  default="pca",
+    p.add_argument("--manifold_method",      type=str, default="pca",
                    choices=["pca", "tsne", "both"])
 
     # EMA
@@ -148,7 +153,7 @@ def make_recon_grid(x_input, x_rec, labels, n_per_class=4):
     labels_np = np.array(labels)
 
     originals, reconstructions = [], []
-    for cls_id in [0, 1]:   # 0=Normal, 1=Cardiomegaly
+    for cls_id in [0, 1]:
         idxs = np.where(labels_np == cls_id)[0][:n_per_class]
         for idx in idxs:
             originals.append(x_01[idx])
@@ -170,14 +175,13 @@ def make_attention_grid(x_input, attn_maps, labels, n_per_class=4,
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     import matplotlib.patches as mpatches
-    from io import BytesIO
     from PIL import Image
 
     x_01      = (np.array(x_input) + 1.0) / 2.0
     attn_ca   = np.array(attn_maps['cardiomegaly'])
     labels_np = np.array(labels)
     B_full    = x_01.shape[0]
-    B         = B_full // 2   # per-class batch size
+    B         = B_full // 2
 
     def _draw_bbox(ax, bbox_norm, img_h, img_w, color):
         if bbox_norm is None:
@@ -192,8 +196,8 @@ def make_attention_grid(x_input, attn_maps, labels, n_per_class=4,
         )
         ax.add_patch(rect)
 
-    n_rows    = 2   # Normal, Cardiomegaly
-    n_subcols = 2   # CXR | cardio attn
+    n_rows    = 2
+    n_subcols = 2
     n_cols    = n_per_class * n_subcols
 
     fig, axes = plt.subplots(n_rows, n_cols,
@@ -210,9 +214,8 @@ def make_attention_grid(x_input, attn_maps, labels, n_per_class=4,
             img = x_01[idx, :, :, 0]
             H, W = img.shape
             base = col_pos * n_subcols
-            within_cls = idx - B if cls_id == 1 else None   # index within cardio block
+            within_cls = idx - B if cls_id == 1 else None
 
-            # Original CXR
             ax = axes[row, base]
             ax.imshow(img, cmap='gray', vmin=0, vmax=1)
             ax.axis('off')
@@ -221,7 +224,6 @@ def make_attention_grid(x_input, attn_maps, labels, n_per_class=4,
             if row == 0 and col_pos == 0:
                 ax.set_title('CXR', fontsize=7)
 
-            # Cardio attention
             ax = axes[row, base + 1]
             ax.imshow(img, cmap='gray', vmin=0, vmax=1)
             ax.imshow(attn_ca[idx], cmap='hot', alpha=0.5,
@@ -246,7 +248,8 @@ def make_attention_grid(x_input, attn_maps, labels, n_per_class=4,
 
 
 def save_latent_manifold_plot(model, vae_params, vae_batch_stats, loader,
-                               save_path, max_samples=600, method="pca"):
+                               save_path, max_samples=600, method="pca",
+                               use_bbox_cross_attn=False):
     """PCA/t-SNE scatter of common + cardio heads with silhouette scores."""
     from sklearn.decomposition import PCA
     from sklearn.manifold import TSNE
@@ -264,6 +267,7 @@ def save_latent_manifold_plot(model, vae_params, vae_batch_stats, loader,
             break
         for img_key, label_val in [('x_norm', 0), ('x_disease1', 1)]:
             x  = jnp.array(batch_torch[img_key].permute(0, 2, 3, 1).numpy())
+            # For V2 cross-attn: pass None bbox → BboxCrossAttnHead uses fallback query
             ld = model.apply(variables, x, method=model.encode)
             remaining = max_samples - len(lbls)
             if remaining <= 0:
@@ -337,16 +341,20 @@ def main():
     torch.manual_seed(args.seed)
     rng = jax.random.PRNGKey(args.seed)
 
+    IS_V2 = (args.model_version == 'v2')
+
     print("=" * 60)
-    print("BINARY SEPVAE  z=[z_common(16), z_cardio(16)]  @ 64×64")
+    print(f"BINARY SEPVAE  model={args.model_version}  "
+          f"z=[z_common({args.z_channels_common}), z_cardio({args.z_channels_disease})]")
     print("Obj 1 — orthogonality: KL + FactorVAE MI + bbox attn")
-    print("Obj 2 — crisp recon:   MSE + CheSS perceptual")
+    print("Obj 2 — crisp recon:   MSE" +
+          (" + CheSS perceptual" if args.weight_perceptual > 0 else ""))
     print("=" * 60)
 
     # ── Output dirs ───────────────────────────────────────────────────────────
-    timestamp  = datetime.now().strftime("%Y%m%d-%H%M%S")
-    exp_slug   = f"{args.exp_name}-{timestamp}"
-    output_dir = Path(args.output_root) / exp_slug
+    timestamp   = datetime.now().strftime("%Y%m%d-%H%M%S")
+    exp_slug    = f"{args.exp_name}-{timestamp}"
+    output_dir  = Path(args.output_root) / exp_slug
     ckpt_dir    = ensure_dir(output_dir / "checkpoints")
     samples_dir = ensure_dir(output_dir / "samples")
     manifold_dir = ensure_dir(output_dir / "manifold")
@@ -369,7 +377,7 @@ def main():
         dicom_dir=args.dicom_dir,
         csv_path=args.csv_path,
         img_size=args.img_size,
-        exclude_cross_disease_overlap=args.exclude_cross_disease_overlap,
+        exclude_cross_disease_overlap=getattr(args, 'exclude_cross_disease_overlap', False),
         use_cache=args.use_cache,
     )
     loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True,
@@ -377,74 +385,120 @@ def main():
                         drop_last=True)
     print(f"Dataset: {len(dataset)} pairs, {len(loader)} steps/epoch")
 
-    # ── CheSS weights ─────────────────────────────────────────────────────────
-    if args.chess_converted and os.path.exists(args.chess_converted):
-        chess_params, chess_batch_stats = load_converted_weights(args.chess_converted)
-    else:
-        chess_params, chess_batch_stats = convert_chess_resnet50(
-            args.chess_checkpoint, verbose=True
+    # ── Model ─────────────────────────────────────────────────────────────────
+    if IS_V2:
+        from models.sep_vae_v2 import SepVAEV2
+        sepvae = SepVAEV2(
+            z_channels_common=args.z_channels_common,
+            z_channels_disease=args.z_channels_disease,
+            query_dim=args.attn_query_dim,
+            attn_heads=args.attn_heads,
+            use_bbox_cross_attn=args.use_bbox_cross_attn,
         )
-        from utils.weight_converter import save_converted_weights
-        converted_path = output_dir / "chess_jax_params.npy"
-        save_converted_weights((chess_params, chess_batch_stats), str(converted_path))
-        print(f"Saved converted weights: {converted_path}")
+        vae_batch_stats = {}   # GroupNorm — no batch_stats
+        dummy_x      = jnp.ones((1, args.img_size, args.img_size, 1))
+        dummy_labels = jnp.array([0])
+        rng, init_rng = jax.random.split(rng)
+        vae_vars = sepvae.init(init_rng, dummy_x, dummy_labels, key=init_rng)
+        vae_params = jax.tree_util.tree_map(jnp.array, vae_vars['params'])
+        n_vae_params = sum(p.size for p in jax.tree_util.tree_leaves(vae_params))
+        print(f"SepVAEV2 parameters: {n_vae_params:,}")
+        print(f"  bbox cross-attn: {args.use_bbox_cross_attn}  "
+              f"attn_heads: {args.attn_heads}  img_size: {args.img_size}")
 
-    # Partition CheSS weights into trunk (layers 1-3) and layer4 branch
-    chess_trunk_params = {k: v for k, v in chess_params.items()
-                          if not k.startswith('layer4')}
-    chess_trunk_stats  = {k: v for k, v in chess_batch_stats.items()
-                          if not k.startswith('layer4')}
-    chess_l4_params    = {k: v for k, v in chess_params.items()
-                          if k.startswith('layer4')}
-    chess_l4_stats     = {k: v for k, v in chess_batch_stats.items()
-                          if k.startswith('layer4')}
-
-    # ── SepVAE model ──────────────────────────────────────────────────────────
-    sepvae = SepVAE(
-        z_channels_common=args.z_channels_common,
-        z_channels_disease=args.z_channels_disease,
-        attn_query_dim=args.attn_query_dim,
-    )
-
-    dummy_x      = jnp.ones((1, args.img_size, args.img_size, 1))
-    dummy_labels = jnp.array([0])
-    rng, init_rng = jax.random.split(rng)
-    vae_vars = sepvae.init(
-        {'params': init_rng, 'dropout': init_rng},
-        dummy_x, dummy_labels, key=init_rng, train=True,
-    )
-    vae_params      = vae_vars['params']
-    vae_batch_stats = vae_vars.get('batch_stats', {})
-
-    # Inject CheSS weights:
-    #   backbone  ← trunk (layers 1-3) — frozen
-    #   bg_branch ← layer4 — fine-tuned (common path)
-    #   tg_branch ← layer4 — fine-tuned (disease path), same init as bg_branch
-    vae_params = dict(vae_params)
-    vae_params['encoder'] = dict(vae_params['encoder'])
-    vae_params['encoder']['backbone']  = chess_trunk_params
-    vae_params['encoder']['bg_branch'] = chess_l4_params
-    vae_params['encoder']['tg_branch'] = chess_l4_params
-
-    if vae_batch_stats:
-        vae_batch_stats = dict(vae_batch_stats)
-        vae_batch_stats['encoder'] = dict(vae_batch_stats.get('encoder', {}))
-        vae_batch_stats['encoder']['backbone']  = chess_trunk_stats
-        vae_batch_stats['encoder']['bg_branch'] = chess_l4_stats
-        vae_batch_stats['encoder']['tg_branch'] = chess_l4_stats
     else:
-        vae_batch_stats = {
-            'encoder': {
-                'backbone':  chess_trunk_stats,
-                'bg_branch': chess_l4_stats,
-                'tg_branch': chess_l4_stats,
-            }
-        }
+        # ── V1: CheSS backbone ────────────────────────────────────────────────
+        from models.sep_vae_jax import SepVAE
+        from models.resnet_jax import ResNet50CheSS
+        from utils.weight_converter import convert_chess_resnet50, load_converted_weights
 
-    vae_params      = jax.tree_util.tree_map(jnp.array, vae_params)
-    vae_batch_stats = jax.tree_util.tree_map(jnp.array, vae_batch_stats)
-    n_vae_params = sum(p.size for p in jax.tree_util.tree_leaves(vae_params))
-    print(f"SepVAE parameters: {n_vae_params:,}")
+        sepvae = SepVAE(
+            z_channels_common=args.z_channels_common,
+            z_channels_disease=args.z_channels_disease,
+            attn_query_dim=args.attn_query_dim,
+        )
+
+        if args.chess_converted and os.path.exists(args.chess_converted):
+            chess_params, chess_batch_stats = load_converted_weights(args.chess_converted)
+        else:
+            chess_params, chess_batch_stats = convert_chess_resnet50(
+                args.chess_checkpoint, verbose=True
+            )
+            from utils.weight_converter import save_converted_weights
+            converted_path = output_dir / "chess_jax_params.npy"
+            save_converted_weights((chess_params, chess_batch_stats), str(converted_path))
+            print(f"Saved converted weights: {converted_path}")
+
+        chess_trunk_params = {k: v for k, v in chess_params.items()
+                              if not k.startswith('layer4')}
+        chess_trunk_stats  = {k: v for k, v in chess_batch_stats.items()
+                              if not k.startswith('layer4')}
+        chess_l4_params    = {k: v for k, v in chess_params.items()
+                              if k.startswith('layer4')}
+        chess_l4_stats     = {k: v for k, v in chess_batch_stats.items()
+                              if k.startswith('layer4')}
+
+        dummy_x      = jnp.ones((1, args.img_size, args.img_size, 1))
+        dummy_labels = jnp.array([0])
+        rng, init_rng = jax.random.split(rng)
+        vae_vars = sepvae.init(
+            {'params': init_rng, 'dropout': init_rng},
+            dummy_x, dummy_labels, key=init_rng, train=True,
+        )
+        vae_params      = vae_vars['params']
+        vae_batch_stats = vae_vars.get('batch_stats', {})
+
+        vae_params = dict(vae_params)
+        vae_params['encoder'] = dict(vae_params['encoder'])
+        vae_params['encoder']['backbone']  = chess_trunk_params
+        vae_params['encoder']['bg_branch'] = chess_l4_params
+        vae_params['encoder']['tg_branch'] = chess_l4_params
+
+        if vae_batch_stats:
+            vae_batch_stats = dict(vae_batch_stats)
+            vae_batch_stats['encoder'] = dict(vae_batch_stats.get('encoder', {}))
+            vae_batch_stats['encoder']['backbone']  = chess_trunk_stats
+            vae_batch_stats['encoder']['bg_branch'] = chess_l4_stats
+            vae_batch_stats['encoder']['tg_branch'] = chess_l4_stats
+        else:
+            vae_batch_stats = {
+                'encoder': {
+                    'backbone':  chess_trunk_stats,
+                    'bg_branch': chess_l4_stats,
+                    'tg_branch': chess_l4_stats,
+                }
+            }
+
+        vae_params      = jax.tree_util.tree_map(jnp.array, vae_params)
+        vae_batch_stats = jax.tree_util.tree_map(jnp.array, vae_batch_stats)
+        n_vae_params = sum(p.size for p in jax.tree_util.tree_leaves(vae_params))
+        print(f"SepVAE (V1) parameters: {n_vae_params:,}")
+
+    # ── Perceptual backbone (frozen CheSS, only loaded when needed) ───────────
+    backbone_for_percep  = None
+    backbone_vars_percep = None
+    if args.weight_perceptual > 0.0:
+        if IS_V2 and not args.perceptual_only:
+            raise ValueError(
+                "V2 + weight_perceptual > 0 requires --perceptual_only "
+                "(CheSS is not used as V2 encoder backbone)"
+            )
+        from models.resnet_jax import ResNet50CheSS
+        from utils.weight_converter import convert_chess_resnet50, load_converted_weights
+        if args.chess_converted and os.path.exists(args.chess_converted):
+            _cp, _cs = load_converted_weights(args.chess_converted)
+        else:
+            _cp, _cs = convert_chess_resnet50(args.chess_checkpoint, verbose=False)
+        backbone_for_percep  = ResNet50CheSS()
+        backbone_vars_percep = jax.tree_util.tree_map(
+            jnp.array, {'params': _cp, 'batch_stats': _cs}
+        )
+        print(f"Perceptual loss: enabled (weight={args.weight_perceptual})")
+    else:
+        print("Perceptual loss: disabled")
+
+    if args.weight_bbox_attn > 0.0:
+        print(f"Bbox attention supervision: enabled (weight={args.weight_bbox_attn})")
 
     # ── FactorVAE discriminator ────────────────────────────────────────────────
     disc_input_dim = args.z_channels_common + args.z_channels_disease
@@ -453,60 +507,51 @@ def main():
     disc_vars      = discriminator.init(disc_rng, jnp.ones((1, disc_input_dim)))
     disc_params    = disc_vars['params']
     n_disc_params  = sum(p.size for p in jax.tree_util.tree_leaves(disc_params))
-    print(f"FactorDiscriminator parameters: {n_disc_params:,} (input_dim={disc_input_dim})")
+    print(f"FactorDiscriminator parameters: {n_disc_params:,}")
 
-    # ── Perceptual backbone (full CheSS, no extra params) ─────────────────────
-    backbone_for_percep  = None
-    backbone_vars_percep = None
-    if args.weight_perceptual > 0.0:
-        backbone_for_percep  = ResNet50CheSS()
-        backbone_vars_percep = jax.tree_util.tree_map(jnp.array, {
-            'params':      chess_params,
-            'batch_stats': chess_batch_stats,
-        })
-        print(f"Perceptual loss: enabled (weight={args.weight_perceptual})")
+    # ── Optimizer ─────────────────────────────────────────────────────────────
+    if IS_V2:
+        # Single AdamW — all V2 params trained at the same LR (no frozen CheSS trunk)
+        tx_vae = optax.chain(
+            optax.clip_by_global_norm(args.grad_clip),
+            optax.adamw(learning_rate=args.lr_vae, weight_decay=args.weight_decay),
+        )
+        print(f"VAE optimizer:  AdamW lr={args.lr_vae}  wd={args.weight_decay}")
     else:
-        print("Perceptual loss: disabled")
+        # V1: backbone (layers 1-3) gets a lower LR to preserve CheSS features
+        from flax import traverse_util
 
-    if args.weight_bbox_attn > 0.0:
-        print(f"Bbox attention supervision: enabled (weight={args.weight_bbox_attn})")
+        def _vae_label_fn(params):
+            flat = traverse_util.flatten_dict(params)
+            labels = {
+                k: 'backbone' if k[0] == 'encoder' and len(k) > 1 and k[1] == 'backbone'
+                   else 'vae'
+                for k in flat
+            }
+            return traverse_util.unflatten_dict(labels)
 
-    # ── Optimizers ────────────────────────────────────────────────────────────
-    # Backbone (layers 1-3) gets a 10× lower LR than the rest of the VAE so
-    # it adapts slowly toward a more VAE-compatible representation without
-    # destroying the pretrained CheSS features.
-    from flax import traverse_util
+        tx_vae = optax.chain(
+            optax.clip_by_global_norm(args.grad_clip),
+            optax.multi_transform(
+                transforms={
+                    'backbone': optax.adamw(learning_rate=args.lr_backbone,
+                                            weight_decay=args.weight_decay),
+                    'vae':      optax.adamw(learning_rate=args.lr_vae,
+                                            weight_decay=args.weight_decay),
+                },
+                param_labels=_vae_label_fn,
+            ),
+        )
+        print(f"VAE optimizer:  AdamW backbone_lr={args.lr_backbone}  "
+              f"vae_lr={args.lr_vae}  wd={args.weight_decay}")
 
-    def _vae_label_fn(params):
-        """Label backbone params 'backbone', everything else 'vae'."""
-        flat = traverse_util.flatten_dict(params)
-        labels = {
-            k: 'backbone' if k[0] == 'encoder' and len(k) > 1 and k[1] == 'backbone'
-               else 'vae'
-            for k in flat
-        }
-        return traverse_util.unflatten_dict(labels)
-
-    tx_vae = optax.chain(
-        optax.clip_by_global_norm(args.grad_clip),
-        optax.multi_transform(
-            transforms={
-                'backbone': optax.adamw(learning_rate=args.lr_backbone,
-                                        weight_decay=args.weight_decay),
-                'vae':      optax.adamw(learning_rate=args.lr_vae,
-                                        weight_decay=args.weight_decay),
-            },
-            param_labels=_vae_label_fn,
-        ),
-    )
-    tx_disc = optax.chain(
+    tx_disc    = optax.chain(
         optax.clip_by_global_norm(args.grad_clip),
         optax.adam(learning_rate=args.lr_disc),
     )
     vae_state  = TrainState.create(apply_fn=None, params=vae_params,  tx=tx_vae)
     disc_state = TrainState.create(apply_fn=None, params=disc_params, tx=tx_disc)
     ema_params = jax.tree_util.tree_map(jnp.array, vae_params)
-    print(f"VAE optimizer:  AdamW backbone_lr={args.lr_backbone}  vae_lr={args.lr_vae}  wd={args.weight_decay}")
     print(f"Disc optimizer: Adam  (lr={args.lr_disc})")
 
     # ── Resume ────────────────────────────────────────────────────────────────
@@ -525,7 +570,8 @@ def main():
             restored_disc_opt    = from_state_dict(disc_state.opt_state, ckpt['disc_opt_state'])
             disc_state = disc_state.replace(params=restored_disc_params,
                                             opt_state=restored_disc_opt)
-        vae_batch_stats = jax.tree_util.tree_map(jnp.array, ckpt['vae_batch_stats'])
+        if vae_batch_stats and 'vae_batch_stats' in ckpt:
+            vae_batch_stats = jax.tree_util.tree_map(jnp.array, ckpt['vae_batch_stats'])
         if 'ema_params' in ckpt:
             ema_params = jax.tree_util.tree_map(jnp.array, ckpt['ema_params'])
         rng         = jnp.array(ckpt['rng'])
@@ -553,6 +599,7 @@ def main():
     # ── JIT'd steps ───────────────────────────────────────────────────────────
     _backbone_apply_fn = backbone_for_percep.apply if backbone_for_percep else None
     _backbone_vars     = backbone_vars_percep
+    _batch_stats_arg   = vae_batch_stats if vae_batch_stats else None
 
     @jax.jit
     def update_ema(ema_p, params, decay):
@@ -563,10 +610,13 @@ def main():
     @jax.jit
     def get_pooled_latents(vae_params_arg, x):
         """Encoder-only forward pass → spatially pooled z_c and z_ca."""
-        variables = {'params': vae_params_arg, 'batch_stats': vae_batch_stats}
+        variables = {'params': vae_params_arg}
+        if _batch_stats_arg is not None:
+            variables['batch_stats'] = _batch_stats_arg
+        # bbox=None → BboxCrossAttnHead uses fallback learned query (safe for warm-up)
         ld = sepvae.apply(variables, x, method=sepvae.encode)
-        z_c  = jnp.mean(ld['common'][0],       axis=(1, 2))   # (2B, Cc)
-        z_ca = jnp.mean(ld['cardiomegaly'][0], axis=(1, 2))   # (2B, Cd)
+        z_c  = jnp.mean(ld['common'][0],       axis=(1, 2))
+        z_ca = jnp.mean(ld['cardiomegaly'][0], axis=(1, 2))
         return z_c, z_ca
 
     @jax.jit
@@ -582,18 +632,21 @@ def main():
     @jax.jit
     def vae_step(vae_state_arg, batch, disc_params_frozen, key, kl_anneal):
         """Update VAE with all losses including FactorVAE MI (disc frozen).
-        Also returns z_c_pooled/z_ca_pooled so the caller can feed them to the
-        *next* disc_step without a second encoder forward pass (one step stale,
-        which is standard FactorVAE practice and has no meaningful effect)."""
+        bbox_full and has_bbox are pre-assembled in the batch dict by the train loop."""
+        bbox_arg     = batch.get('bbox_full')     # (2B, 4) or None
+        has_bbox_arg = batch.get('has_bbox')      # (2B,)  or None
+
         def loss_fn(params):
             total_loss, logs, z_c, z_ca = sepvae_loss(
                 sepvae, params, batch, key, loss_cfg,
-                batch_stats=vae_batch_stats,
+                batch_stats=_batch_stats_arg,
                 kl_anneal=kl_anneal,
                 disc_params=disc_params_frozen,
                 discriminator=discriminator,
                 backbone_apply_fn=_backbone_apply_fn,
                 backbone_variables=_backbone_vars,
+                bbox=bbox_arg,
+                has_bbox=has_bbox_arg,
             )
             return total_loss, (logs, z_c, z_ca)
         (loss, (logs, z_c, z_ca)), grads = jax.value_and_grad(loss_fn, has_aux=True)(
@@ -602,11 +655,14 @@ def main():
         return vae_state_arg.apply_gradients(grads=grads), logs, z_c, z_ca
 
     @jax.jit
-    def reconstruct_and_encode(vae_params_arg, x, labels, key):
+    def reconstruct_and_encode(vae_params_arg, x, labels, key, bbox_full, has_bbox):
         """Full forward pass for visualisation."""
-        variables = {'params': vae_params_arg, 'batch_stats': vae_batch_stats}
+        variables = {'params': vae_params_arg}
+        if _batch_stats_arg is not None:
+            variables['batch_stats'] = _batch_stats_arg
         x_rec, latents_dict, _, _ = sepvae.apply(
-            variables, x, labels, key=key, train=False
+            variables, x, labels, key=key, train=False,
+            bbox=bbox_full, has_bbox=has_bbox,
         )
         return x_rec, latents_dict['attn_maps']
 
@@ -615,13 +671,8 @@ def main():
     print("TRAINING" + (f" (resuming from epoch {start_epoch})" if start_epoch > 1 else ""))
     print("=" * 60)
 
-    # Warm up stale latents with one encoder pass before the loop starts.
-    # After that, vae_step returns fresh latents for the next disc update,
-    # eliminating the redundant get_pooled_latents call every step.
-    _init_x = jnp.concatenate([
-        jnp.zeros((args.batch_size, args.img_size, args.img_size, 1)),
-        jnp.zeros((args.batch_size, args.img_size, args.img_size, 1)),
-    ], axis=0)
+    # Warm up stale latents before the loop starts.
+    _init_x = jnp.zeros((args.batch_size * 2, args.img_size, args.img_size, 1))
     z_c_stale, z_ca_stale = get_pooled_latents(vae_state.params, _init_x)
 
     for epoch in range(start_epoch, args.epochs + 1):
@@ -642,15 +693,27 @@ def main():
                 'bbox_disease1':  jnp.array(batch_torch['bbox_disease1'].numpy()),
             }
 
+            # ── Assemble (2B, 4) bbox tensor for V2 cross-attention ──────────
+            # Normal images get a zero bbox (will have has_bbox=0 → fallback query)
+            B_step     = batch['x_norm'].shape[0]
+            bbox_cardio = batch['bbox_disease1']                          # (B, 4)
+            bbox_full   = jnp.concatenate(
+                [jnp.zeros_like(bbox_cardio), bbox_cardio], axis=0
+            )                                                              # (2B, 4)
+            has_bbox    = (
+                (bbox_full[:, 2] - bbox_full[:, 0]) > 1e-4
+            ).astype(jnp.float32)                                          # (2B,)
+            batch['bbox_full'] = bbox_full
+            batch['has_bbox']  = has_bbox
+
             rng, key_disc, key_vae = jax.random.split(rng, 3)
 
-            # Step 1: discriminator update using latents from the previous VAE step.
-            # One step stale — standard FactorVAE practice, negligible effect.
+            # Step 1: discriminator update (one step stale — standard FactorVAE)
             disc_state, disc_loss, disc_acc = disc_step(
                 disc_state, z_c_stale, z_ca_stale, key_disc
             )
 
-            # Step 2: VAE update (disc frozen); returns fresh latents for next disc step.
+            # Step 2: VAE update (disc frozen); returns fresh latents for next disc step
             disc_params_frozen = jax.lax.stop_gradient(disc_state.params)
             vae_state, logs, z_c_stale, z_ca_stale = vae_step(
                 vae_state, batch, disc_params_frozen, key_vae, kl_anneal
@@ -660,7 +723,7 @@ def main():
                 ema_params = update_ema(ema_params, vae_state.params, args.ema_decay)
 
             logs = dict(logs) | {
-                'loss/disc':       disc_loss,
+                'loss/disc':        disc_loss,
                 'metrics/disc_acc': disc_acc,
             }
             epoch_logs.append(logs)
@@ -693,17 +756,18 @@ def main():
         # Checkpoint
         if epoch % args.save_every == 0:
             ckpt_path = ckpt_dir / f"checkpoint_epoch{epoch:04d}.pkl"
+            ckpt_data = {
+                'epoch': epoch, 'global_step': global_step,
+                'vae_params':      vae_state.params,
+                'ema_params':      ema_params,
+                'vae_batch_stats': vae_batch_stats,
+                'vae_opt_state':   vae_state.opt_state,
+                'disc_params':     disc_state.params,
+                'disc_opt_state':  disc_state.opt_state,
+                'rng': rng, 'args': vars(args),
+            }
             with open(ckpt_path, 'wb') as f:
-                f.write(to_bytes({
-                    'epoch': epoch, 'global_step': global_step,
-                    'vae_params':      vae_state.params,
-                    'ema_params':      ema_params,
-                    'vae_batch_stats': vae_batch_stats,
-                    'vae_opt_state':   vae_state.opt_state,
-                    'disc_params':     disc_state.params,
-                    'disc_opt_state':  disc_state.opt_state,
-                    'rng': rng, 'args': vars(args),
-                }))
+                f.write(to_bytes(ckpt_data))
             print(f"  Saved: {ckpt_path}")
 
         # Visualisations
@@ -711,19 +775,19 @@ def main():
             rng, vis_key = jax.random.split(rng)
             vis_params = ema_params if args.ema_decay > 0 else vae_state.params
 
-            B        = batch['x_norm'].shape[0]
             x_full   = jnp.concatenate([batch['x_norm'], batch['x_disease1']], axis=0)
             labels_v = batch['disease_labels']
 
-            x_rec, attn_maps = reconstruct_and_encode(vis_params, x_full, labels_v, vis_key)
+            x_rec, attn_maps = reconstruct_and_encode(
+                vis_params, x_full, labels_v, vis_key,
+                batch['bbox_full'], batch['has_bbox'],
+            )
 
-            # Reconstruction grid
             grid_path = samples_dir / f"recon_epoch{epoch:04d}.png"
             make_recon_grid(x_full, x_rec, labels_v,
                             n_per_class=args.n_samples_per_class).save(str(grid_path))
             print(f"  Saved recon grid: {grid_path}")
 
-            # Attention maps
             attn_path = diag_dir / f"attn_maps_epoch{epoch:04d}.png"
             make_attention_grid(
                 np.array(x_full),
@@ -736,8 +800,8 @@ def main():
 
             if args.wandb and _WANDB:
                 wandb.log({
-                    "samples/recon_grid":       wandb.Image(str(grid_path)),
-                    "diagnostics/attn_maps":    wandb.Image(str(attn_path)),
+                    "samples/recon_grid":    wandb.Image(str(grid_path)),
+                    "diagnostics/attn_maps": wandb.Image(str(attn_path)),
                 }, step=global_step)
 
         # Manifold
@@ -748,6 +812,7 @@ def main():
                 sepvae, manifold_params, vae_batch_stats, loader,
                 manifold_path, max_samples=args.manifold_max_samples,
                 method=args.manifold_method,
+                use_bbox_cross_attn=args.use_bbox_cross_attn,
             )
             if metrics:
                 print("  Manifold: " + ", ".join(

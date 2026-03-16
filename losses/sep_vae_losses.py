@@ -306,22 +306,26 @@ def sepvae_loss(
     discriminator: Optional[nn.Module] = None,
     backbone_apply_fn=None,
     backbone_variables: Dict = None,
+    bbox: Optional[jnp.ndarray] = None,
+    has_bbox: Optional[jnp.ndarray] = None,
 ) -> Tuple[jnp.ndarray, Dict, jnp.ndarray, jnp.ndarray]:
     """
     Binary SepVAE VAE loss (discriminator is frozen via stop_gradient at call site).
 
     Args:
-        model:              SepVAE model
+        model:              SepVAE model (V1 or V2)
         params:             VAE parameters
         batch:              dict with x_norm, x_disease1, disease_labels, bbox_disease1
         key:                JAX PRNG key
         cfg:                loss weights
-        batch_stats:        backbone BatchNorm stats
+        batch_stats:        backbone BatchNorm stats (None for V2 GroupNorm models)
         kl_anneal:          KL warmup factor in [0,1]  (None = 1.0)
         disc_params:        FactorDiscriminator params (frozen, stop_gradient applied outside)
         discriminator:      FactorDiscriminator module (static — not a JAX array)
         backbone_apply_fn:  backbone.apply for perceptual loss (None = disabled)
         backbone_variables: backbone variables dict for perceptual loss
+        bbox:               (2B, 4) bbox tensor for V2 cross-attention encoder (None = V1/D0)
+        has_bbox:           (2B,) float32 mask — 1.0 where bbox is valid (None = V1/D0)
 
     Returns:
         (total_loss, logs)
@@ -339,7 +343,8 @@ def sepvae_loss(
 
     key1, _ = jax.random.split(key)
     x_rec, latents_dict, z_c_pooled, z_ca_pooled = model.apply(
-        variables, x, labels, key=key1, train=True
+        variables, x, labels, key=key1, train=True,
+        bbox=bbox, has_bbox=has_bbox,
     )
 
     # ── 1. Reconstruction (MSE) ──────────────────────────────────────────────

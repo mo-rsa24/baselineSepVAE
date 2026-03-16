@@ -41,6 +41,13 @@ def load_dicom_as_uint16(dicom_path: str, img_size: int) -> np.ndarray:
     dcm = pydicom.dcmread(dicom_path)
     arr = dcm.pixel_array.astype(np.float32)
 
+    # Fix polarity: MONOCHROME1 stores bone as dark, air as bright — radiologic
+    # convention is the opposite (MONOCHROME2).  Invert before normalising so all
+    # cached images share the same "bones bright / air dark" intensity profile.
+    photometric = str(getattr(dcm, 'PhotometricInterpretation', 'MONOCHROME2')).strip()
+    if photometric == 'MONOCHROME1':
+        arr = arr.max() - arr
+
     # Normalise to [0, 65535] while staying in float32
     arr -= arr.min()
     if arr.max() > 0:
