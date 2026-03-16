@@ -1,0 +1,28 @@
+# ── Core JAX stack (CUDA 12 build installed separately — see setup guide) ────
+# Install JAX first via: pip install -U "jax[cuda12]"
+flax>=0.8.0
+optax>=0.2.2
+
+# ── PyTorch (CPU-only, used only for DataLoader) ─────────────────────────────
+# Install via: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+torchvision>=0.17.0
+
+# ── Data / image processing ───────────────────────────────────────────────────
+numpy>=1.24.0
+pandas>=2.0.0
+pydicom>=2.4.0
+Pillow>=10.0.0
+scipy>=1.11.0
+
+# ── ML utilities ──────────────────────────────────────────────────────────────
+scikit-learn>=1.3.0
+
+# ── Visualisation ─────────────────────────────────────────────────────────────
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# ── Experiment tracking ───────────────────────────────────────────────────────
+wandb>=0.17.0
+
+# ── Misc ──────────────────────────────────────────────────────────────────────
+tqdm>=4.65.0

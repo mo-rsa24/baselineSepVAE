@@ -1,0 +1,43 @@
+# Experiment outputs — never commit
+runs_sepvae/
+results/
+wandb/
+logs/
+*.out
+*.err
+
+# Checkpoints and large binaries
+*.pkl
+*.pth
+*.pth.tar
+*.npy
+*.npz
+*.h5
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+.env
+*.egg
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Conda / pip
+*.conda
+conda-lock.yml
+
