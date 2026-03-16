@@ -56,6 +56,7 @@ git add \
     losses/sep_vae_losses.py \
     losses/lpips_gan.py \
     losses/__init__.py \
+    models/ae_kl.py \
     models/sep_vae_jax.py \
     models/resnet_jax.py \
     models/__init__.py \
@@ -97,16 +98,14 @@ RUNPOD_PORT="<pod-ssh-port>"
 DEST="/workspace"          # adjust if your volume mounts elsewhere
 
 # 1. Pre-cached dataset (~7–8 GB) — the only transfer needed; raw DICOMs stay on cluster
-rsync -avz --progress \
-    -e "ssh -p ${RUNPOD_PORT}" \
-    /datasets/mmolefe/vinbigdata/cache_npy/ \
-    root@${RUNPOD_IP}:${DEST}/vinbigdata/cache_npy/
+rsync -avz --progress --no-owner --no-group \
+  /datasets/mmolefe/vinbigdata/cache_npy/ \
+  runpod-tcp:${DEST}/vinbigdata/cache_npy/
 
 # 2. CheSS weights (~353 MB)
-rsync -avz --progress \
-    -e "ssh -p ${RUNPOD_PORT}" \
-    /datasets/mmolefe/chess/pretrained_weights.pth.tar \
-    root@${RUNPOD_IP}:${DEST}/chess/pretrained_weights.pth.tar
+rsync -avz --progress --no-owner --no-group \
+  /datasets/mmolefe/chess/pretrained_weights.pth.tar \
+  runpod-tcp:${DEST}/chess/pretrained_weights.pth.tar
 ```
 
 Verify on the pod:
@@ -123,6 +122,11 @@ ls ${DEST}/chess/                                  # pretrained_weights.pth.tar
 
 ## PHASE B — On the RunPod A100 pod
 
+All commands below are run from the **pod shell**.
+For speed, install Miniconda on pod-local storage (`/root/miniconda3`), which is
+ephemeral and can be deleted/reinstalled at any time.
+Keep data, repo, and checkpoints on `/workspace` if you want them to persist.
+
 SSH into the pod:
 ```bash
 ssh -p <port> root@<pod-ip>
@@ -136,23 +140,36 @@ nvcc --version        # confirm CUDA 12.x
 # A100 SXM pods ship CUDA 12.1–12.4 — the jax[cuda12] wheel covers all of these
 ```
 
-### B2 — Install Miniconda
+### B2 — Fast Miniconda reinstall (pod-local, non-persistent)
 
 ```bash
-# Check first
-which conda && conda --version && echo "already installed"
+MINICONDA_DIR="/root/miniconda3"
+INSTALLER="/tmp/miniconda.sh"
 
-# If absent:
-wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O /tmp/miniconda.sh
-bash /tmp/miniconda.sh -b -p /workspace/miniconda
-echo 'export PATH="/workspace/miniconda/bin:$PATH"' >> ~/.bashrc
+# Optional hard reset: delete old install if it exists
+[ -d "$MINICONDA_DIR" ] && rm -rf "$MINICONDA_DIR"
+
+# Fresh download with retries
+wget -q --show-progress --tries=5 --timeout=30 \
+  https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh \
+  -O "$INSTALLER"
+
+# Install and activate
+bash "$INSTALLER" -b -p "$MINICONDA_DIR"
+eval "$("$MINICONDA_DIR/bin/conda" shell.bash hook)"
+conda init bash
 source ~/.bashrc
-conda init bash && source ~/.bashrc
+
+# Verify
+which conda
+conda --version
 ```
 
 ### B3 — Create conda environment
 
 ```bash
+# If reinstalling, remove old env name first (safe if missing)
+conda env remove -n jaxstack -y 2>/dev/null || true
 conda create -n jaxstack python=3.11 -y
 conda activate jaxstack
 ```
