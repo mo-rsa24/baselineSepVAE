@@ -83,6 +83,7 @@ def main():
     # ── Read CSV, collect target image IDs ────────────────────────────────────
     image_ids     = set()
     bbox_rows     = []   # rows with bbox annotations (disease images)
+    normal_ids    = set()  # Normal images have no bboxes — track separately
     image_orig_hw = {}   # image_id -> (orig_h, orig_w) from first bbox encounter
 
     with open(args.csv_path) as f:
@@ -92,8 +93,11 @@ def main():
             image_ids.add(row['image_id'])
             if row['x_min']:
                 bbox_rows.append(row)
+            elif row['class_id'] == '14':
+                normal_ids.add(row['image_id'])
 
     print(f"Target image IDs: {len(image_ids):,}")
+    print(f"Normal (no-bbox) image IDs: {len(normal_ids):,}")
     print(f"Bbox annotation rows: {len(bbox_rows):,}")
 
     # ── Cache DICOMs ──────────────────────────────────────────────────────────
@@ -135,6 +139,9 @@ def main():
         writer = csv.writer(f)
         writer.writerow(['image_id', 'class_name', 'class_id',
                          'x_min_norm', 'y_min_norm', 'x_max_norm', 'y_max_norm'])
+        for iid in sorted(normal_ids):
+            writer.writerow([iid, 'No finding', '14', '', '', '', ''])
+            written += 1
         for row in bbox_rows:
             iid  = row['image_id']
             dims = dicom_dims.get(iid)
@@ -153,9 +160,7 @@ def main():
 
     # ── Manifest ──────────────────────────────────────────────────────────────
     class_counts = defaultdict(int)
-    for iid in image_ids:
-        pass  # we don't track per-image class here easily
-    # count from bbox rows + normal
+    class_counts['14'] = len(normal_ids)
     for row in bbox_rows:
         class_counts[row['class_id']] += 1
 
