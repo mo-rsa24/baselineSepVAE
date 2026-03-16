@@ -1,24 +1,30 @@
 """
-fix_polarity_cache.py — In-place polarity correction for existing .npy cache.
+fix_polarity_cache.py — Two-step in-place polarity correction for .npy cache.
 
-The original cache_dicoms.py did not check PhotometricInterpretation, so any
-DICOM stored as MONOCHROME1 (bones dark, air bright) was cached with the
-wrong polarity.
+Step 1  (machine with DICOMs — cluster):
+    Scans DICOM headers to find MONOCHROME1 images.  Writes a JSON list of
+    affected image IDs.  Does NOT need write access to the .npy cache.
 
-This script:
-  1. Scans all DICOM files for MONOCHROME1 flag.
-  2. For each affected image whose .npy exists, inverts it in-place:
-         corrected = 65535 - cached_uint16
-  3. Deletes valid_ids_*.json caches so the dataset re-validates on next run.
+        python scripts/fix_polarity_cache.py scan \\
+            --dicom_dir /datasets/mmolefe/vinbigdata/train \\
+            --out        scripts/monochrome1_ids.json \\
+            --num_workers 16
 
-Run ONCE after updating cache_dicoms.py.  Safe to re-run — already-corrected
-files are detected and skipped.
+Step 2  (machine with the .npy cache — cluster OR RunPod):
+    Reads the JSON list, inverts affected .npy files in-place
+    (corrected = 65535 − cached_uint16), and removes validity scan caches
+    so the dataset re-validates on the next DataLoader start.
 
-Usage:
-    python scripts/fix_polarity_cache.py \\
-        --dicom_dir  /datasets/mmolefe/vinbigdata/train \\
-        --cache_dir  /datasets/mmolefe/vinbigdata/cache_npy \\
-        --num_workers 16
+        python scripts/fix_polarity_cache.py apply \\
+            --cache_dir /workspace/vinbigdata/cache_npy \\
+            --id_list   scripts/monochrome1_ids.json
+
+Workflow when DICOMs and cache live on different machines (RunPod scenario):
+    1. Run `scan` on cluster.
+    2. git add scripts/monochrome1_ids.json && git commit && git push
+    3. git pull on RunPod.
+    4. Run `apply` on RunPod.
+    5. Launch training.
 """
 
 import argparse
@@ -30,111 +36,141 @@ import numpy as np
 import pydicom
 
 
-# ── Per-worker task ────────────────────────────────────────────────────────────
+# ── Step 1: scan ──────────────────────────────────────────────────────────────
 
-def check_and_fix(args):
-    """
-    Returns (image_id, status) where status is one of:
-      'fixed'      — was MONOCHROME1, .npy inverted in-place
-      'skip_mono2' — MONOCHROME2 (correct polarity, no action)
-      'skip_nonpy' — MONOCHROME1 but no .npy found (not cached yet)
-      'error'      — could not read DICOM
-    """
-    dicom_path, npy_path = args
+def _check_one(dicom_path: str):
+    """Returns (image_id, is_mono1, error_msg)."""
     image_id = Path(dicom_path).stem
-
     try:
-        dcm = pydicom.dcmread(str(dicom_path), stop_before_pixels=True)
-        photometric = str(
-            getattr(dcm, 'PhotometricInterpretation', 'MONOCHROME2')
-        ).strip()
+        dcm = pydicom.dcmread(dicom_path, stop_before_pixels=True)
+        photo = str(getattr(dcm, 'PhotometricInterpretation', 'MONOCHROME2')).strip()
+        return image_id, photo == 'MONOCHROME1', ''
     except Exception as e:
-        return image_id, 'error', str(e)
-
-    if photometric != 'MONOCHROME1':
-        return image_id, 'skip_mono2', ''
-
-    # MONOCHROME1 — check if .npy exists
-    if not Path(npy_path).exists():
-        return image_id, 'skip_nonpy', ''
-
-    # Invert the cached uint16 array: corrected = 65535 - inverted
-    try:
-        arr = np.load(str(npy_path))           # uint16 (H, W)
-        arr = (65535 - arr.astype(np.int32)).astype(np.uint16)
-        np.save(str(npy_path), arr)
-    except Exception as e:
-        return image_id, 'error', str(e)
-
-    return image_id, 'fixed', ''
+        return image_id, False, str(e)
 
 
-# ── Main ───────────────────────────────────────────────────────────────────────
-
-def main():
-    p = argparse.ArgumentParser()
-    p.add_argument('--dicom_dir',   required=True,
-                   help='Directory containing raw .dicom files')
-    p.add_argument('--cache_dir',   required=True,
-                   help='Cache root produced by cache_dicoms.py '
-                        '(contains images/ sub-folder)')
-    p.add_argument('--num_workers', type=int, default=8)
-    args = p.parse_args()
-
+def cmd_scan(args):
     dicom_dir = Path(args.dicom_dir)
-    cache_dir = Path(args.cache_dir)
-    npy_dir   = cache_dir / 'images'
-
     if not dicom_dir.exists():
         raise FileNotFoundError(f"DICOM dir not found: {dicom_dir}")
+
+    dicom_files = sorted(dicom_dir.glob('*.dicom'))
+    print(f"Scanning {len(dicom_files):,} DICOMs with {args.num_workers} workers…")
+
+    mono1_ids, errors = [], []
+    with ProcessPoolExecutor(max_workers=args.num_workers) as ex:
+        futs = {ex.submit(_check_one, str(d)): d for d in dicom_files}
+        for i, fut in enumerate(as_completed(futs), 1):
+            image_id, is_mono1, err = fut.result()
+            if is_mono1:
+                mono1_ids.append(image_id)
+            if err:
+                errors.append((image_id, err))
+            if i % 2000 == 0:
+                print(f"  {i:,}/{len(dicom_files):,}  MONOCHROME1 so far: {len(mono1_ids):,}")
+
+    mono1_ids.sort()
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with open(out, 'w') as f:
+        json.dump(mono1_ids, f, indent=2)
+
+    print(f"\nScan complete.")
+    print(f"  MONOCHROME1 images : {len(mono1_ids):,}")
+    print(f"  Unreadable DICOMs  : {len(errors):,}")
+    print(f"  ID list written    : {out}")
+    if errors:
+        print("  First 5 errors:")
+        for eid, emsg in errors[:5]:
+            print(f"    {eid}: {emsg}")
+
+
+# ── Step 2: apply ─────────────────────────────────────────────────────────────
+
+def _invert_npy(npy_path: str):
+    """Invert one .npy in-place. Returns (path, status, msg)."""
+    p = Path(npy_path)
+    if not p.exists():
+        return npy_path, 'missing', ''
+    try:
+        arr = np.load(str(p))                                    # uint16 (H, W)
+        arr = (65535 - arr.astype(np.int32)).astype(np.uint16)
+        np.save(str(p), arr)
+        return npy_path, 'fixed', ''
+    except Exception as e:
+        return npy_path, 'error', str(e)
+
+
+def cmd_apply(args):
+    cache_dir = Path(args.cache_dir)
+    npy_dir   = cache_dir / 'images'
     if not npy_dir.exists():
         raise FileNotFoundError(f"Cache images dir not found: {npy_dir}")
 
-    dicom_files = sorted(dicom_dir.glob('*.dicom'))
-    print(f"Found {len(dicom_files):,} DICOM files in {dicom_dir}")
+    with open(args.id_list) as f:
+        mono1_ids = json.load(f)
 
-    tasks = [
-        (str(d), str(npy_dir / (d.stem + '.npy')))
-        for d in dicom_files
-    ]
+    print(f"Applying polarity fix to {len(mono1_ids):,} MONOCHROME1 images…")
 
-    counts = {'fixed': 0, 'skip_mono2': 0, 'skip_nonpy': 0, 'error': 0}
+    npy_paths = [str(npy_dir / f"{iid}.npy") for iid in mono1_ids]
+    counts = {'fixed': 0, 'missing': 0, 'error': 0}
     errors = []
 
-    print(f"Scanning with {args.num_workers} workers…")
     with ProcessPoolExecutor(max_workers=args.num_workers) as ex:
-        futs = {ex.submit(check_and_fix, t): t[0] for t in tasks}
+        futs = {ex.submit(_invert_npy, p): p for p in npy_paths}
         for i, fut in enumerate(as_completed(futs), 1):
-            image_id, status, msg = fut.result()
+            path, status, msg = fut.result()
             counts[status] += 1
             if status == 'error':
-                errors.append((image_id, msg))
-            if i % 1000 == 0:
-                print(f"  {i:,}/{len(tasks):,}  "
+                errors.append((path, msg))
+            if i % 500 == 0:
+                print(f"  {i:,}/{len(npy_paths):,}  "
                       f"fixed={counts['fixed']}  "
-                      f"mono2={counts['skip_mono2']}  "
-                      f"no_npy={counts['skip_nonpy']}  "
+                      f"missing={counts['missing']}  "
                       f"err={counts['error']}")
 
-    print(f"\nDone.")
-    print(f"  Corrected (MONOCHROME1 → inverted .npy): {counts['fixed']:,}")
-    print(f"  Already correct (MONOCHROME2):            {counts['skip_mono2']:,}")
-    print(f"  MONOCHROME1 but not cached yet:           {counts['skip_nonpy']:,}")
-    print(f"  Errors (DICOM unreadable):                {counts['error']:,}")
-
+    print(f"\nApply complete.")
+    print(f"  Fixed   : {counts['fixed']:,}")
+    print(f"  Missing : {counts['missing']:,}  (not in this cache — OK)")
+    print(f"  Errors  : {counts['error']:,}")
     if errors:
-        print(f"\nFirst 10 errors:")
-        for eid, emsg in errors[:10]:
-            print(f"  {eid}: {emsg}")
+        print("  First 5 errors:")
+        for ep, em in errors[:5]:
+            print(f"    {ep}: {em}")
 
-    # Delete validity scan caches — dataset will re-validate on next DataLoader init
+    # Remove validity scan caches — dataset re-validates on next DataLoader init
     for json_name in ('valid_ids_cache.json', 'valid_ids_pair_cache.json'):
         p = cache_dir / json_name
         if p.exists():
             p.unlink()
             print(f"Deleted scan cache: {p}")
 
-    print("\nPolarity fix complete. Re-run training — no other changes needed.")
+    print("\nPolarity fix complete. Launch training.")
+
+
+# ── CLI ───────────────────────────────────────────────────────────────────────
+
+def main():
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    sub = p.add_subparsers(dest='cmd', required=True)
+
+    s = sub.add_parser('scan', help='Scan DICOMs → write MONOCHROME1 ID list')
+    s.add_argument('--dicom_dir',   required=True)
+    s.add_argument('--out',         default='scripts/monochrome1_ids.json')
+    s.add_argument('--num_workers', type=int, default=8)
+
+    a = sub.add_parser('apply', help='Invert cached .npy files from ID list')
+    a.add_argument('--cache_dir',   required=True)
+    a.add_argument('--id_list',     default='scripts/monochrome1_ids.json')
+    a.add_argument('--num_workers', type=int, default=8)
+
+    args = p.parse_args()
+    if args.cmd == 'scan':
+        cmd_scan(args)
+    else:
+        cmd_apply(args)
 
 
 if __name__ == '__main__':
