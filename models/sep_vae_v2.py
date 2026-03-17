@@ -195,18 +195,23 @@ class Layer4BranchGN(nn.Module):
     Diverges from the shared trunk after layer3.
 
     Input:  (B, 16, 16, 1024)   — layer3 output (256×256 input)
-    Output: (B,  8,  8, 2048)
+    Output: (B, 16, 16, 2048)
+
+    All blocks use stride=1 (no spatial downsampling). The first block
+    uses a projection shortcut to change channel count (1024 → 2048)
+    without changing spatial resolution. This avoids the stride-2 →
+    bilinear-upsample round-trip that introduced aliasing into the latent.
     """
     @nn.compact
     def __call__(self, x):
         for i in range(3):
             x = BottleneckBlockGN(
                 filters=512,
-                stride=(2 if i == 0 else 1),
-                use_projection=(i == 0),
+                stride=1,
+                use_projection=(i == 0),   # project 1024 → 2048 at block0, no stride
                 name=f'block{i}',
             )(x)
-        return x   # (B, 8, 8, 2048)
+        return x   # (B, 16, 16, 2048)
 
 
 # =============================================================================
@@ -374,7 +379,6 @@ class BboxCrossAttnHead(nn.Module):
 
         h_flat = h.reshape(B, HW, C)
         K = nn.Dense(self.query_dim, use_bias=False, name='key_proj')(h_flat)   # (B, HW, D)
-        V = nn.Dense(self.query_dim, use_bias=False, name='val_proj')(h_flat)   # (B, HW, D)
 
         # Learned fallback query — used for Normal images or when bbox is absent
         q_learned = self.param('fallback_query', nn.initializers.normal(0.02), (self.query_dim,))
@@ -488,13 +492,9 @@ class SepVAEEncoderV2(nn.Module):
         # Shared trunk (nn.remat on submodule handles gradient checkpointing)
         h_shared = self.backbone(x)   # (B, 16, 16, 1024)
 
-        # Learnable layer4 branches
-        h_bg = self.bg_branch(h_shared)   # (B, 8, 8, 2048)
-        h_tg = self.tg_branch(h_shared)   # (B, 8, 8, 2048)
-
-        # Upsample both branches to 16×16 (latent spatial resolution)
-        h_bg = jax.image.resize(h_bg, (B, 16, 16, 2048), method='bilinear')
-        h_tg = jax.image.resize(h_tg, (B, 16, 16, 2048), method='bilinear')
+        # Learnable layer4 branches — stride=1 throughout, stay at 16×16
+        h_bg = self.bg_branch(h_shared)   # (B, 16, 16, 2048)
+        h_tg = self.tg_branch(h_shared)   # (B, 16, 16, 2048)
 
         # Common head
         mu_c, logvar_c = self.head_common(h_bg)
@@ -643,15 +643,17 @@ class SepVAEDecoderV2(nn.Module):
     z_disease drives reconstruction of an enlarged heart.
 
     Channel schedule (high-res → low-res order, indices 0–4):
-        (64, 128, 256, 512, 512)
+        (128, 128, 256, 512, 512)
     Upsamples (SmoothUp = bilinear resize + 2× conv, no checkerboard):
         16 → 32 → 64 → 128 → 256
+    SelfAttention2D at 32×32 (after i=3 ResBlockSE, before SmoothUp to 64×64):
+        1024 tokens, O(1M) attention ops — coordinates cardiac silhouette globally.
     """
-    ch_mults:       Sequence[int] = (64, 128, 256, 512, 512)
+    ch_mults:       Sequence[int] = (128, 128, 256, 512, 512)
     num_res_blocks: int           = 2
     dropout:        float         = 0.0
     z_channels:     int           = 32
-    se_reduction:   int           = 16
+    se_reduction:   int           = 8
 
     @nn.compact
     def __call__(self, z, train: bool = True):
@@ -665,6 +667,12 @@ class SepVAEDecoderV2(nn.Module):
                     dropout=self.dropout,
                     se_reduction=self.se_reduction,
                 )(h, train=train)
+            # Self-attention at 32×32 — after i=3 ResBlockSE blocks, before SmoothUp.
+            # At this point spatial size is 32×32 (1024 tokens). Global attention here
+            # lets the decoder coordinate the cardiac silhouette across the full field
+            # of view before upsampling to finer scales.
+            if i == 3:
+                h = SelfAttention2D(num_heads=4, name='dec_attn_32')(h)
             if i > 0:
                 h = SmoothUp(ch=self.ch_mults[i - 1])(h)
 
@@ -708,9 +716,10 @@ class SepVAEV2(nn.Module):
         )
         # SE-gated decoder: 16×16 → 256×256, 4 SmoothUp calls
         self.decoder = SepVAEDecoderV2(
-            ch_mults=(64, 128, 256, 512, 512),
+            ch_mults=(128, 128, 256, 512, 512),
             num_res_blocks=2,
             z_channels=self.z_channels_common + self.z_channels_disease,
+            se_reduction=8,
         )
 
     def __call__(

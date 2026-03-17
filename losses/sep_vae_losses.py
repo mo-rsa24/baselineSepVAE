@@ -11,13 +11,17 @@ Five targeted losses — each maps directly to a research objective:
 
   Objective 2 — crisp VAE reconstructions:
     • L_rec        (MSE — hard-zero nulling makes this a clean signal)
-    • L_perceptual (L1 in frozen CheSS feature space — zero extra params)
+    • L_perceptual (L1 in frozen CheSS feature space, layers 1–3 — zero extra params)
+    • L_gan        (hinge generator loss vs frozen PatchGAN — sharpens textures)
+    • L_tv         (anisotropic total variation — suppresses stripe/grid artifacts)
 
   Total:
-    L_vae = L_rec + β_c·KL_c + β_d·KL_ca + κ·L_mi + γ·L_perceptual + λ·L_bbox
+    L_vae = L_rec + β_c·KL_c + β_d·KL_ca + κ·L_mi + γ·L_perceptual
+          + λ·L_bbox + α·L_gan + τ·L_tv
 
-  Discriminator (trained alternately, frozen during L_vae):
-    L_disc = BCE(D(z_c, z_ca), 1) + BCE(D(z_c, z_ca[perm]), 0)
+  Discriminators (trained alternately, frozen during L_vae):
+    L_factor_disc = BCE(D(z_c, z_ca), 1) + BCE(D(z_c, z_ca[perm]), 0)
+    L_patch_disc  = hinge(D_patch(x_real), D_patch(x_rec_stale))
 """
 
 import jax
@@ -34,6 +38,25 @@ from typing import Dict, Tuple, Optional
 def reconstruction_loss(x_true: jnp.ndarray, x_pred: jnp.ndarray) -> jnp.ndarray:
     """MSE reconstruction loss (mean over batch and pixels)."""
     return jnp.mean(jnp.mean((x_true - x_pred) ** 2, axis=(1, 2, 3)))
+
+
+def total_variation_loss(x: jnp.ndarray) -> jnp.ndarray:
+    """
+    Anisotropic total variation loss — penalises abrupt intensity changes
+    between neighbouring pixels in both spatial directions.
+
+    Directly suppresses the horizontal stripe artifacts that emerge when a
+    strided perceptual backbone (CheSS / ResNet-50) injects its stride-aliased
+    gradients into the decoder.
+
+    Args:
+        x: (B, H, W, C) in [0, 1]
+    Returns:
+        scalar mean TV over batch.
+    """
+    diff_h = x[:, 1:, :, :] - x[:, :-1, :, :]   # row-to-row differences
+    diff_w = x[:, :, 1:, :] - x[:, :, :-1, :]   # col-to-col differences
+    return jnp.mean(jnp.abs(diff_h)) + jnp.mean(jnp.abs(diff_w))
 
 
 # ============================================================================
@@ -255,8 +278,11 @@ def backbone_perceptual_loss(
 
     feats_rec  = backbone_apply_fn(backbone_variables, x_rec_scaled, return_multiscale=True)
 
+    # Use layers 1–3 (drop layer4): layer4 is most stride-aliased and the
+    # primary source of horizontal stripe artifacts in decoder gradients.
+    # Layer1 is the most texture-sensitive and least semantically smoothed.
     loss = jnp.float32(0.0)
-    for layer in ['layer2', 'layer3', 'layer4']:
+    for layer in ['layer1', 'layer2', 'layer3']:
         loss += jnp.mean(jnp.abs(feats_orig[layer] - feats_rec[layer]))
 
     return loss / 3.0
@@ -275,11 +301,13 @@ class SepVAELossConfig:
         weight_kl_common, weight_kl_disease, weight_mi_factor, weight_bbox_attn
 
     Objective 2 (crisp reconstructions):
-        weight_rec, weight_perceptual
+        weight_rec, weight_perceptual, weight_gan, weight_tv
     """
     # Objective 2
     weight_rec:          float = 1.0
     weight_perceptual:   float = 0.05
+    weight_gan:          float = 0.0   # PatchGAN hinge generator loss (D5)
+    weight_tv:           float = 0.0   # Total variation — suppresses stripe artifacts (D5)
 
     # Objective 1
     weight_kl_common:    float = 1e-4
@@ -308,27 +336,31 @@ def sepvae_loss(
     backbone_variables: Dict = None,
     bbox: Optional[jnp.ndarray] = None,
     has_bbox: Optional[jnp.ndarray] = None,
-) -> Tuple[jnp.ndarray, Dict, jnp.ndarray, jnp.ndarray]:
+    patch_disc_params: Optional[Dict] = None,
+    patch_discriminator: Optional[nn.Module] = None,
+) -> Tuple[jnp.ndarray, Dict, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     """
-    Binary SepVAE VAE loss (discriminator is frozen via stop_gradient at call site).
+    Binary SepVAE VAE loss (both discriminators frozen via stop_gradient at call site).
 
     Args:
-        model:              SepVAE model (V1 or V2)
-        params:             VAE parameters
-        batch:              dict with x_norm, x_disease1, disease_labels, bbox_disease1
-        key:                JAX PRNG key
-        cfg:                loss weights
-        batch_stats:        backbone BatchNorm stats (None for V2 GroupNorm models)
-        kl_anneal:          KL warmup factor in [0,1]  (None = 1.0)
-        disc_params:        FactorDiscriminator params (frozen, stop_gradient applied outside)
-        discriminator:      FactorDiscriminator module (static — not a JAX array)
-        backbone_apply_fn:  backbone.apply for perceptual loss (None = disabled)
-        backbone_variables: backbone variables dict for perceptual loss
-        bbox:               (2B, 4) bbox tensor for V2 cross-attention encoder (None = V1/D0)
-        has_bbox:           (2B,) float32 mask — 1.0 where bbox is valid (None = V1/D0)
+        model:               SepVAE model (V1 or V2)
+        params:              VAE parameters
+        batch:               dict with x_norm, x_disease1, disease_labels, bbox_disease1
+        key:                 JAX PRNG key
+        cfg:                 loss weights
+        batch_stats:         backbone BatchNorm stats (None for V2 GroupNorm models)
+        kl_anneal:           KL warmup factor in [0,1]  (None = 1.0)
+        disc_params:         FactorDiscriminator params (frozen, stop_gradient applied outside)
+        discriminator:       FactorDiscriminator module (static — not a JAX array)
+        backbone_apply_fn:   backbone.apply for perceptual loss (None = disabled)
+        backbone_variables:  backbone variables dict for perceptual loss
+        bbox:                (2B, 4) bbox tensor for V2 cross-attention encoder (None = V1/D0)
+        has_bbox:            (2B,) float32 mask — 1.0 where bbox is valid (None = V1/D0)
+        patch_disc_params:   PatchGAN discriminator params (frozen, stop_gradient outside)
+        patch_discriminator: NLayerDiscriminator module (static — not a JAX array)
 
     Returns:
-        (total_loss, logs)
+        (total_loss, logs, z_c_pooled, z_ca_pooled, x_rec)
     """
     x_norm     = batch['x_norm']        # (B, H, W, 1) in [-1, 1]
     x_disease1 = batch['x_disease1']    # (B, H, W, 1) cardiomegaly
@@ -384,13 +416,33 @@ def sepvae_loss(
     else:
         l_perceptual = jnp.float32(0.0)
 
+    # ── 6. PatchGAN generator loss (optional, D5+) ───────────────────────────
+    # Decoder is trained to fool the frozen image-space discriminator.
+    # Hinge generator loss: -mean(D(x_rec)) pushes patch logits positive.
+    if cfg.weight_gan > 0.0 and patch_disc_params is not None and patch_discriminator is not None:
+        fake_logits = patch_discriminator.apply(
+            {'params': patch_disc_params}, x_rec, train=False
+        )
+        l_gan = -jnp.mean(fake_logits)
+    else:
+        l_gan = jnp.float32(0.0)
+
+    # ── 7. Total variation loss (optional, D5+) ───────────────────────────────
+    # Suppresses horizontal stripe artifacts from strided perceptual gradients.
+    if cfg.weight_tv > 0.0:
+        l_tv = total_variation_loss(x_rec)
+    else:
+        l_tv = jnp.float32(0.0)
+
     # ── Total ─────────────────────────────────────────────────────────────────
     total_loss = (
-        cfg.weight_rec         * l_rec
+        cfg.weight_rec          * l_rec
         + l_kl
-        + cfg.weight_mi_factor * l_mi
-        + cfg.weight_bbox_attn * l_bbox
+        + cfg.weight_mi_factor  * l_mi
+        + cfg.weight_bbox_attn  * l_bbox
         + cfg.weight_perceptual * l_perceptual
+        + cfg.weight_gan        * l_gan
+        + cfg.weight_tv         * l_tv
     )
 
     logs = {
@@ -404,5 +456,7 @@ def sepvae_loss(
         'loss/mi_factor':       l_mi,
         'loss/bbox_attn':       l_bbox,
         'loss/perceptual':      l_perceptual,
+        'loss/gan_g':           l_gan,
+        'loss/tv':              l_tv,
     }
-    return total_loss, logs, z_c_pooled, z_ca_pooled
+    return total_loss, logs, z_c_pooled, z_ca_pooled, x_rec

@@ -36,11 +36,11 @@ ATTN_QUERY_DIM="${ATTN_QUERY_DIM:-256}"
 ATTN_HEADS="${ATTN_HEADS:-4}"
 
 # ── Training ──────────────────────────────────────────────────────────────────
-BATCH_SIZE="${BATCH_SIZE:-8}"
+BATCH_SIZE="${BATCH_SIZE:-16}"
 EPOCHS="${EPOCHS:-20}"
 NUM_WORKERS="${NUM_WORKERS:-8}"
 SEED="${SEED:-0}"
-LR_VAE="${LR_VAE:-1e-4}"
+LR_VAE="${LR_VAE:-2e-4}"
 LR_DISC="${LR_DISC:-1e-4}"
 WEIGHT_DECAY="${WEIGHT_DECAY:-1e-4}"
 GRAD_CLIP="${GRAD_CLIP:-1.0}"
@@ -54,6 +54,7 @@ SIGMA_INACTIVE="${SIGMA_INACTIVE:-0.1}"
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 EXP_NAME="${EXP_NAME:-d1_recon_bbox_xattn}"
+SAVE_EVERY="${SAVE_EVERY:-5}"
 SAMPLE_EVERY="${SAMPLE_EVERY:-5}"
 MANIFOLD_EVERY="${MANIFOLD_EVERY:-10}"
 WANDB="${WANDB:-1}"
@@ -127,6 +128,7 @@ ARGS=(
 
   --output_root          "$OUTPUT_ROOT"
   --exp_name             "$EXP_NAME"
+  --save_every           "$SAVE_EVERY"
   --sample_every         "$SAMPLE_EVERY"
   --manifold_every       "$MANIFOLD_EVERY"
 )

@@ -54,6 +54,7 @@ SIGMA_INACTIVE="${SIGMA_INACTIVE:-0.1}"
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 EXP_NAME="${EXP_NAME:-d0_smoke_v2}"
+SAVE_EVERY="${SAVE_EVERY:-1}"
 SAMPLE_EVERY="${SAMPLE_EVERY:-1}"
 MANIFOLD_EVERY="${MANIFOLD_EVERY:--1}"
 WANDB="${WANDB:-1}"
@@ -127,6 +128,7 @@ ARGS=(
 
   --output_root          "$OUTPUT_ROOT"
   --exp_name             "$EXP_NAME"
+  --save_every           "$SAVE_EVERY"
   --sample_every         "$SAMPLE_EVERY"
   --manifold_every       "$MANIFOLD_EVERY"
 )

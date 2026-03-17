@@ -10,11 +10,14 @@ Architecture (V2):
   Nulling: hard-zero z_cardio for Normal images before decoding
   Decoder: progressive bilinear upsampling 16→256 with SE-gated ResBlocks
 
-Loss stack (two separate optimizers):
+Loss stack (three separate optimizers):
   VAE optimizer:
     L_rec (MSE) + KL_common + KL_cardio + κ·L_mi + λ·L_bbox + γ·L_perceptual
-  Discriminator optimizer:
+    + α·L_gan (hinge generator vs PatchGAN) + τ·L_tv (total variation)
+  FactorVAE discriminator optimizer:
     L_disc = BCE(D(z_c, z_ca), joint=1) + BCE(D(z_c, z_ca[perm]), marginal=0)
+  PatchGAN discriminator optimizer (D5):
+    L_patch = hinge(D_patch(x_real), D_patch(x_rec_stale))
 """
 
 import os
@@ -41,6 +44,7 @@ from losses.sep_vae_losses import (
     SepVAELossConfig, sepvae_loss,
     FactorDiscriminator, factor_disc_loss,
 )
+from losses.lpips_gan import NLayerDiscriminator, hinge_d_loss, vanilla_d_loss
 
 try:
     import wandb
@@ -89,6 +93,14 @@ def parse_args():
     p.add_argument("--weight_mi_factor",     type=float, default=1.0)
     p.add_argument("--weight_bbox_attn",     type=float, default=0.0)
     p.add_argument("--weight_perceptual",    type=float, default=0.0)
+    p.add_argument("--weight_gan",           type=float, default=0.0,
+                   help="PatchGAN hinge generator loss weight (D5+). 0=disabled.")
+    p.add_argument("--weight_tv",            type=float, default=0.0,
+                   help="Total variation loss weight — suppresses stripe artifacts (D5+).")
+    p.add_argument("--gan_start_step",       type=int,   default=5000,
+                   help="Global step at which PatchGAN loss activates. Lets VAE stabilise first.")
+    p.add_argument("--lr_patch_disc",        type=float, default=1e-4,
+                   help="Learning rate for PatchGAN discriminator optimizer.")
     p.add_argument("--sigma_inactive",       type=float, default=0.1)
     p.add_argument("--kl_warmup_epochs",     type=int,   default=0)
 
@@ -110,7 +122,7 @@ def parse_args():
     p.add_argument("--output_root",          type=str, default="runs_sepvae")
     p.add_argument("--exp_name",             type=str, default="sepvae")
     p.add_argument("--log_every",            type=int, default=100)
-    p.add_argument("--save_every",           type=int, default=1)
+    p.add_argument("--save_every",           type=int, default=5)
     p.add_argument("--sample_every",         type=int, default=5)
     p.add_argument("--n_samples_per_class",  type=int, default=4)
     p.add_argument("--manifold_every",       type=int, default=-1,
@@ -554,6 +566,26 @@ def main():
     ema_params = jax.tree_util.tree_map(jnp.array, vae_params)
     print(f"Disc optimizer: Adam  (lr={args.lr_disc})")
 
+    # ── PatchGAN discriminator (D5) ───────────────────────────────────────────
+    # NLayerDiscriminator operates in image space (x_real vs x_rec_stale).
+    # Frozen via stop_gradient during VAE update; updated via patch_disc_step.
+    patch_discriminator = NLayerDiscriminator(in_channels=1, n_layers=3)
+    rng, patch_disc_rng = jax.random.split(rng)
+    patch_disc_vars     = patch_discriminator.init(
+        patch_disc_rng, jnp.ones((1, args.img_size, args.img_size, 1))
+    )
+    patch_disc_params   = patch_disc_vars['params']
+    n_patch_disc_params = sum(p.size for p in jax.tree_util.tree_leaves(patch_disc_params))
+    print(f"PatchGAN discriminator parameters: {n_patch_disc_params:,}")
+    tx_patch_disc  = optax.chain(
+        optax.clip_by_global_norm(args.grad_clip),
+        optax.adam(learning_rate=args.lr_patch_disc),
+    )
+    patch_disc_state = TrainState.create(apply_fn=None, params=patch_disc_params,
+                                         tx=tx_patch_disc)
+    print(f"PatchGAN optimizer: Adam  (lr={args.lr_patch_disc}  "
+          f"weight_gan={args.weight_gan}  gan_start_step={args.gan_start_step})")
+
     # ── Resume ────────────────────────────────────────────────────────────────
     start_epoch = 1
     global_step = 0
@@ -570,6 +602,12 @@ def main():
             restored_disc_opt    = from_state_dict(disc_state.opt_state, ckpt['disc_opt_state'])
             disc_state = disc_state.replace(params=restored_disc_params,
                                             opt_state=restored_disc_opt)
+        if 'patch_disc_params' in ckpt:
+            restored_pd_params = jax.tree_util.tree_map(jnp.array, ckpt['patch_disc_params'])
+            restored_pd_opt    = from_state_dict(patch_disc_state.opt_state,
+                                                  ckpt['patch_disc_opt_state'])
+            patch_disc_state = patch_disc_state.replace(params=restored_pd_params,
+                                                         opt_state=restored_pd_opt)
         if vae_batch_stats and 'vae_batch_stats' in ckpt:
             vae_batch_stats = jax.tree_util.tree_map(jnp.array, ckpt['vae_batch_stats'])
         if 'ema_params' in ckpt:
@@ -583,6 +621,8 @@ def main():
     loss_cfg = SepVAELossConfig(
         weight_rec=args.weight_rec,
         weight_perceptual=args.weight_perceptual,
+        weight_gan=args.weight_gan,
+        weight_tv=args.weight_tv,
         weight_kl_common=args.weight_kl_common,
         weight_kl_disease=args.weight_kl_disease,
         weight_mi_factor=args.weight_mi_factor,
@@ -591,6 +631,8 @@ def main():
     )
     print(f"\nLoss weights: rec={loss_cfg.weight_rec}  "
           f"percep={loss_cfg.weight_perceptual}  "
+          f"gan={loss_cfg.weight_gan}  "
+          f"tv={loss_cfg.weight_tv}  "
           f"kl_c={loss_cfg.weight_kl_common}  "
           f"kl_d={loss_cfg.weight_kl_disease}  "
           f"mi_factor={loss_cfg.weight_mi_factor}  "
@@ -630,14 +672,39 @@ def main():
         return disc_state_arg.apply_gradients(grads=grads), d_loss, d_acc
 
     @jax.jit
-    def vae_step(vae_state_arg, batch, disc_params_frozen, key, kl_anneal):
-        """Update VAE with all losses including FactorVAE MI (disc frozen).
+    def patch_disc_step(patch_disc_state_arg, x_real, x_rec_stale):
+        """Update PatchGAN discriminator: real vs stale reconstruction.
+        x_rec is stop_gradient'd (stale) so gradients flow only through the discriminator.
+        Returns updated state, disc loss, and patch disc accuracy."""
+        x_real_sg = jax.lax.stop_gradient(x_real)
+        x_fake_sg = jax.lax.stop_gradient(x_rec_stale)
+
+        def patch_disc_loss_fn(pd_params):
+            real_logits = patch_discriminator.apply({'params': pd_params}, x_real_sg, train=True)
+            fake_logits = patch_discriminator.apply({'params': pd_params}, x_fake_sg, train=True)
+            pd_loss = hinge_d_loss(real_logits, fake_logits)
+            # Accuracy: real predicted as real (>0) and fake predicted as fake (<=0)
+            pd_acc = (
+                jnp.mean((real_logits > 0).astype(jnp.float32)) * 0.5 +
+                jnp.mean((fake_logits <= 0).astype(jnp.float32)) * 0.5
+            )
+            return pd_loss, pd_acc
+
+        (pd_loss, pd_acc), grads = jax.value_and_grad(patch_disc_loss_fn, has_aux=True)(
+            patch_disc_state_arg.params
+        )
+        return patch_disc_state_arg.apply_gradients(grads=grads), pd_loss, pd_acc
+
+    @jax.jit
+    def vae_step(vae_state_arg, batch, disc_params_frozen, patch_disc_params_frozen,
+                 key, kl_anneal):
+        """Update VAE with all losses including FactorVAE MI and PatchGAN (both discs frozen).
         bbox_full and has_bbox are pre-assembled in the batch dict by the train loop."""
         bbox_arg     = batch.get('bbox_full')     # (2B, 4) or None
         has_bbox_arg = batch.get('has_bbox')      # (2B,)  or None
 
         def loss_fn(params):
-            total_loss, logs, z_c, z_ca = sepvae_loss(
+            total_loss, logs, z_c, z_ca, x_rec = sepvae_loss(
                 sepvae, params, batch, key, loss_cfg,
                 batch_stats=_batch_stats_arg,
                 kl_anneal=kl_anneal,
@@ -647,12 +714,14 @@ def main():
                 backbone_variables=_backbone_vars,
                 bbox=bbox_arg,
                 has_bbox=has_bbox_arg,
+                patch_disc_params=patch_disc_params_frozen,
+                patch_discriminator=patch_discriminator,
             )
-            return total_loss, (logs, z_c, z_ca)
-        (loss, (logs, z_c, z_ca)), grads = jax.value_and_grad(loss_fn, has_aux=True)(
+            return total_loss, (logs, z_c, z_ca, x_rec)
+        (loss, (logs, z_c, z_ca, x_rec)), grads = jax.value_and_grad(loss_fn, has_aux=True)(
             vae_state_arg.params
         )
-        return vae_state_arg.apply_gradients(grads=grads), logs, z_c, z_ca
+        return vae_state_arg.apply_gradients(grads=grads), logs, z_c, z_ca, x_rec
 
     @jax.jit
     def reconstruct_and_encode(vae_params_arg, x, labels, key, bbox_full, has_bbox):
@@ -671,9 +740,10 @@ def main():
     print("TRAINING" + (f" (resuming from epoch {start_epoch})" if start_epoch > 1 else ""))
     print("=" * 60)
 
-    # Warm up stale latents before the loop starts.
-    _init_x = jnp.zeros((args.batch_size * 2, args.img_size, args.img_size, 1))
+    # Warm up stale latents and stale x_rec before the loop starts.
+    _init_x    = jnp.zeros((args.batch_size * 2, args.img_size, args.img_size, 1))
     z_c_stale, z_ca_stale = get_pooled_latents(vae_state.params, _init_x)
+    x_rec_stale = jnp.zeros((args.batch_size * 2, args.img_size, args.img_size, 1))
 
     for epoch in range(start_epoch, args.epochs + 1):
         kl_anneal = jnp.float32(
@@ -706,25 +776,37 @@ def main():
             batch['bbox_full'] = bbox_full
             batch['has_bbox']  = has_bbox
 
-            rng, key_disc, key_vae = jax.random.split(rng, 3)
+            rng, key_disc, key_patch_disc, key_vae = jax.random.split(rng, 4)
 
-            # Step 1: discriminator update (one step stale — standard FactorVAE)
+            # Step 1: FactorVAE discriminator update (stale latents)
             disc_state, disc_loss, disc_acc = disc_step(
                 disc_state, z_c_stale, z_ca_stale, key_disc
             )
 
-            # Step 2: VAE update (disc frozen); returns fresh latents for next disc step
-            disc_params_frozen = jax.lax.stop_gradient(disc_state.params)
-            vae_state, logs, z_c_stale, z_ca_stale = vae_step(
-                vae_state, batch, disc_params_frozen, key_vae, kl_anneal
+            # Step 2: PatchGAN discriminator update (stale x_rec)
+            # x_real is the current batch concatenated (Normal + Cardio), rescaled to [0,1]
+            x_real_01 = (jnp.concatenate([batch['x_norm'], batch['x_disease1']], axis=0)
+                         + 1.0) / 2.0
+            patch_disc_state, patch_disc_loss, patch_disc_acc = patch_disc_step(
+                patch_disc_state, x_real_01, x_rec_stale
+            )
+
+            # Step 3: VAE update (both discs frozen); returns fresh latents and x_rec
+            disc_params_frozen       = jax.lax.stop_gradient(disc_state.params)
+            patch_disc_params_frozen = jax.lax.stop_gradient(patch_disc_state.params)
+            vae_state, logs, z_c_stale, z_ca_stale, x_rec_stale = vae_step(
+                vae_state, batch, disc_params_frozen, patch_disc_params_frozen,
+                key_vae, kl_anneal
             )
 
             if args.ema_decay > 0:
                 ema_params = update_ema(ema_params, vae_state.params, args.ema_decay)
 
             logs = dict(logs) | {
-                'loss/disc':        disc_loss,
-                'metrics/disc_acc': disc_acc,
+                'loss/disc':              disc_loss,
+                'metrics/disc_acc':       disc_acc,
+                'loss/patch_disc':        patch_disc_loss,
+                'metrics/patch_disc_acc': patch_disc_acc,
             }
             epoch_logs.append(logs)
 
@@ -736,7 +818,10 @@ def main():
                       f"mi={float(logs['loss/mi_factor']):.4f}  "
                       f"disc={float(logs['loss/disc']):.4f}  "
                       f"D_acc={float(logs['metrics/disc_acc']):.2f}  "
-                      f"bbox={float(logs['loss/bbox_attn']):.4f}")
+                      f"bbox={float(logs['loss/bbox_attn']):.4f}  "
+                      f"gan_g={float(logs['loss/gan_g']):.4f}  "
+                      f"tv={float(logs['loss/tv']):.4f}  "
+                      f"PD_acc={float(logs['metrics/patch_disc_acc']):.2f}")
                 if args.wandb and _WANDB:
                     wandb.log({k: float(v) for k, v in logs.items()} | {'epoch': epoch},
                               step=global_step)
@@ -751,19 +836,24 @@ def main():
               f"mi={avg['loss/mi_factor']:.4f}  "
               f"disc={avg['loss/disc']:.4f}  "
               f"D_acc={avg['metrics/disc_acc']:.2f}  "
-              f"bbox={avg['loss/bbox_attn']:.4f}")
+              f"bbox={avg['loss/bbox_attn']:.4f}  "
+              f"gan_g={avg['loss/gan_g']:.4f}  "
+              f"tv={avg['loss/tv']:.4f}  "
+              f"PD_acc={avg['metrics/patch_disc_acc']:.2f}")
 
         # Checkpoint
         if epoch % args.save_every == 0:
             ckpt_path = ckpt_dir / f"checkpoint_epoch{epoch:04d}.pkl"
             ckpt_data = {
                 'epoch': epoch, 'global_step': global_step,
-                'vae_params':      vae_state.params,
-                'ema_params':      ema_params,
-                'vae_batch_stats': vae_batch_stats,
-                'vae_opt_state':   vae_state.opt_state,
-                'disc_params':     disc_state.params,
-                'disc_opt_state':  disc_state.opt_state,
+                'vae_params':           vae_state.params,
+                'ema_params':           ema_params,
+                'vae_batch_stats':      vae_batch_stats,
+                'vae_opt_state':        vae_state.opt_state,
+                'disc_params':          disc_state.params,
+                'disc_opt_state':       disc_state.opt_state,
+                'patch_disc_params':    patch_disc_state.params,
+                'patch_disc_opt_state': patch_disc_state.opt_state,
                 'rng': rng, 'args': vars(args),
             }
             with open(ckpt_path, 'wb') as f:
@@ -832,12 +922,14 @@ def main():
     with open(final_path, 'wb') as f:
         f.write(to_bytes({
             'epoch': args.epochs, 'global_step': global_step,
-            'vae_params':      vae_state.params,
-            'ema_params':      ema_params,
-            'vae_batch_stats': vae_batch_stats,
-            'vae_opt_state':   vae_state.opt_state,
-            'disc_params':     disc_state.params,
-            'disc_opt_state':  disc_state.opt_state,
+            'vae_params':           vae_state.params,
+            'ema_params':           ema_params,
+            'vae_batch_stats':      vae_batch_stats,
+            'vae_opt_state':        vae_state.opt_state,
+            'disc_params':          disc_state.params,
+            'disc_opt_state':       disc_state.opt_state,
+            'patch_disc_params':    patch_disc_state.params,
+            'patch_disc_opt_state': patch_disc_state.opt_state,
             'rng': rng, 'args': vars(args),
         }))
     print(f"Final checkpoint: {final_path}")
