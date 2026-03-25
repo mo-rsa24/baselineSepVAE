@@ -2,6 +2,10 @@
 
 **Goal:** Completely remove artifacts, ensure crisp reconstructions, maintain clear latent separation between Normal and Cardiomegaly. Stay at 256×256.
 
+**See also:** [PROJECT_OVERVIEW.md](PROJECT_OVERVIEW.md) — overall project context and how this repo differs from superdiff-ldm.
+**See also:** [ARCHITECTURE.md](ARCHITECTURE.md) — full model architecture (encoder, decoder, latent space, loss portfolio).
+**See also:** [PREPROCESSING.md](PREPROCESSING.md) — data preprocessing pipeline (MONOCHROME1 fix, windowing, normalization, cache format).
+
 **Resumes from:** `/workspace/runs_sepvae/d4_perceptual-20260317-043603/checkpoints/checkpoint_epoch0160.pkl`
 
 ---
@@ -204,26 +208,26 @@ Key hyperparameters (all others inherited from D4 launcher defaults):
 ### Phase 1 — Architecture (`models/sep_vae_v2.py`)
 These are independent of each other and can be done in any order within Phase 1.
 
-- [ ] **A1** Fix A: Change `Layer4BranchGN.block0` from `stride=2, use_projection=True` to `stride=1, use_projection=False`
-- [ ] **A2** Fix A: Remove `jax.image.resize` upsample calls for `h_bg` and `h_tg` in `SepVAEEncoderV2.__call__` (branches now stay at 16×16)
-- [ ] **A3** Fix B: Remove unused `V = nn.Dense(query_dim, name='val_proj')(h_flat)` from `BboxCrossAttnHead`
-- [ ] **A4** Fix D: Change `ch_mults=(64,128,256,512,512)` → `(128,128,256,512,512)` in `SepVAEDecoderV2` default and in `SepVAEV2.setup()`
-- [ ] **A5** Fix E: Add `SelfAttention2D` at 32×32 level in `SepVAEDecoderV2.__call__` (after i=3 ResBlockSE blocks, before SmoothUp)
-- [ ] **A6** Fix F: Change `se_reduction=16` → `se_reduction=8` in `SepVAEDecoderV2` and pass it explicitly in `SepVAEV2.setup()`
+- [x] **A1** Fix A: `Layer4BranchGN.block0` uses `stride=1, use_projection=True` — channel projection 1024→2048 without spatial aliasing
+- [x] **A2** Fix A: No `jax.image.resize` in `SepVAEEncoderV2.__call__`; both branches stay at 16×16
+- [x] **A3** Fix B: `val_proj` removed from `BboxCrossAttnHead`; only `key_proj` remains
+- [x] **A4** Fix D: `ch_mults=(128,128,256,512,512)` in `SepVAEDecoderV2` default and `SepVAEV2.setup()`
+- [x] **A5** Fix E: `SelfAttention2D(num_heads=4, name='dec_attn_32')` added at i==3 in `SepVAEDecoderV2.__call__`
+- [x] **A6** Fix F: `se_reduction=8` set as default in `SepVAEDecoderV2`; passed explicitly in `SepVAEV2.setup()`
 
 ### Phase 2 — Training script (`run/train_sep_vae.py`)
 Must be done in order due to dependencies.
 
-- [ ] **T1** Fix I: Update `vae_step` → `loss_fn` to unpack all 5 return values from `sepvae_loss`; return `x_rec` from `vae_step`
-- [ ] **T2** Fix H: Add CLI args `--weight_gan`, `--weight_tv`, `--gan_start_step`, `--lr_patch_disc` to `parse_args()`
-- [ ] **T3** Fix H: Initialize `NLayerDiscriminator`, create `tx_patch_disc` optimizer, create `patch_disc_state` (after existing FactorDisc init block)
-- [ ] **T4** Fix J: Initialize `x_rec_stale = jnp.zeros((2*args.batch_size, args.img_size, args.img_size, 1))` before the train loop
-- [ ] **T5** Fix H: Add `patch_disc_step` JIT function (hinge_d_loss real vs stale, stop_gradient on stale rec)
-- [ ] **T6** Fix H: Update `vae_step` to accept `patch_disc_params` and `patch_discriminator`; pass to `sepvae_loss`
-- [ ] **T7** Fix H: Update `SepVAELossConfig` construction to pass `weight_gan=args.weight_gan`, `weight_tv=args.weight_tv`
-- [ ] **T8** Fix J: Update train loop to run `patch_disc_step` before `vae_step`; capture `x_rec_stale` from `vae_step`
-- [ ] **T9** Fix H: Update checkpoint save/restore to include `patch_disc_params` / `patch_disc_opt_state`
-- [ ] **T10** Fix H: Update step and epoch summary console logging to show `loss/gan_g`, `loss/tv`, `metrics/patch_disc_acc`
+- [x] **T1** Fix I: `loss_fn` unpacks all 5 values `(total_loss, logs, z_c, z_ca, x_rec)`; `x_rec` returned from `vae_step`
+- [x] **T2** Fix H: `--weight_gan`, `--weight_tv`, `--gan_start_step`, `--lr_patch_disc` added to `parse_args()`
+- [x] **T3** Fix H: `NLayerDiscriminator`, `tx_patch_disc`, `patch_disc_state` initialized after FactorDisc block
+- [x] **T4** Fix J: `x_rec_stale = jnp.zeros((batch_size*2, img_size, img_size, 1))` initialized before train loop
+- [x] **T5** Fix H: `patch_disc_step` JIT added — hinge_d_loss on stop_gradient'd real and stale rec
+- [x] **T6** Fix H: `vae_step` accepts `patch_disc_params_frozen` + `patch_discriminator`; both passed to `sepvae_loss`
+- [x] **T7** Fix H: `SepVAELossConfig` constructed with `weight_gan=args.weight_gan`, `weight_tv=args.weight_tv`
+- [x] **T8** Fix J: Train loop runs `patch_disc_step` (step 2) then `vae_step` (step 3); `x_rec_stale` updated each iter
+- [x] **T9** Fix H: `patch_disc_params` + `patch_disc_opt_state` saved and restored in checkpoint
+- [x] **T10** Fix H: `gan_g`, `tv`, `PD_acc` in step and epoch summary print + wandb log
 
 ### Phase 3 — Launcher
 Depends on Phase 1 and Phase 2 being complete.

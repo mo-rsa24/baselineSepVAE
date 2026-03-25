@@ -1,43 +1,41 @@
-# Experiment outputs — never commit
+# ── Training outputs (binary, enormous) ──────────────────────────────────────
 runs_sepvae/
-results/
+runs_baseline_ldm/
+
+# ── W&B artifacts ─────────────────────────────────────────────────────────────
 wandb/
+
+# ── SLURM / training logs ─────────────────────────────────────────────────────
 logs/
-*.out
-*.err
+*.log
+output*.log
 
-# Checkpoints and large binaries
+# ── Checkpoints (pkl files are large binary) ─────────────────────────────────
 *.pkl
-*.pth
-*.pth.tar
-*.npy
-*.npz
-*.h5
+*.pkl.gz
 
-# Python
+# ── Python cache ──────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
+*.pyo
+*.pyd
 *.egg-info/
-.eggs/
 dist/
 build/
-.env
-*.egg
+.eggs/
 
-# Jupyter
+# ── Jupyter ───────────────────────────────────────────────────────────────────
 .ipynb_checkpoints/
 
-# IDE
+# ── Claude internal (memory, plans) ──────────────────────────────────────────
+.claude/
+
+# ── Git worktrees (temp) ──────────────────────────────────────────────────────
+.worktrees/
+
+# ── Editor artefacts ─────────────────────────────────────────────────────────
 .vscode/
 .idea/
 *.swp
 *.swo
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Conda / pip
-*.conda
-conda-lock.yml
-
+*~

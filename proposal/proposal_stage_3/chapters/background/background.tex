@@ -1,0 +1,23 @@
+\chapter{Background}
+\label{chap:background}
+
+\section{Generative Modeling}
+\label{sec:deep_generative_models}
+
+
+- logical conjunction is the product of probability distributions. We assume that the concepts being composed are independent, and thus the probability distribution of the composition is the product of the probability distributions of the components. 
+% p(x|A and B) = p(x|A) * p(x|B)
+
+this means adding the scores 
+
+
+t2I benchmark categories that are designed to test the compositional capabilities of generative models under different regimes of independence.
+These are as follows:
+- Attribute binding: This category tests the model's ability to bind specific attributes (color, shape, texture) to the correct objects, preventing scenarios where attributes are swapped (e.g., "a red flower and a yellow vase" resulting in a yellow flower and red vase).
+- Object relationships: This category evaluates the model's ability to understand the spatial or functional connection between two or more objects.
+- Cardinality: This category tests the model's ability to handle compositions with multiple instances of the same concept (e.g., "three red cubes" or "a group of blue spheres").
+- Negation: This category assesses the model's ability to correctly interpret negation in compositions (e.g., "a red cube and not a blue sphere" should not include any blue spheres).
+\input{chapters/background/diffusion_models/main}
+\input{chapters/background/compositional_generative_modeling/main}
+\input{chapters/background/context_guided_diffusion/main}
+\input{chapters/background/riemannian_diffusion_models/main}

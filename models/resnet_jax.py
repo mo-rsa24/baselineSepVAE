@@ -168,10 +168,11 @@ class ResNet50CheSS(nn.Module):
             x: Input images (B, 512, 512, 1)
             return_spatial: If True, return spatial features (B, 64, 64, 2048)
                           If False, return global pooled features (B, 2048)
-            return_multiscale: If True, return dict of multi-scale features:
-                              {'layer2': (B, 64, 64, 512),
-                               'layer3': (B, 32, 32, 1024),
-                               'layer4': (B, 16, 16, 2048)}
+            return_multiscale: If True, return dict of stage features:
+                              {'layer1': ...,
+                               'layer2': ...,
+                               'layer3': ...,
+                               'layer4': ...}
                               Overrides return_spatial when True.
 
         Returns:
@@ -216,6 +217,8 @@ class ResNet50CheSS(nn.Module):
                 name=f'layer1_block{i}'
             )(h)
 
+        feat_layer1 = h
+
         # Layer 2: 4 blocks, filters=128, output_channels=512
         # (B, 128, 128, 256) → (B, 64, 64, 512)
         for i in range(4):
@@ -257,6 +260,7 @@ class ResNet50CheSS(nn.Module):
 
         if return_multiscale:
             return {
+                'layer1': feat_layer1,  # highest-resolution residual stage
                 'layer2': feat_layer2,  # (B, 64, 64, 512)  - native resolution
                 'layer3': feat_layer3,  # (B, 32, 32, 1024) - native resolution
                 'layer4': feat_layer4,  # (B, 16, 16, 2048) - native resolution

@@ -1,0 +1,134 @@
+\documentclass[a4paper,twoside,9pt]{report}
+% ----------------- Packages -----------------
+\usepackage{style/witsa4}
+\usepackage{style/witshead}
+\usepackage{float}                  % Allows 'Here and Only Here' [H] for Floats
+\usepackage{url}                    % \url{} command
+\usepackage{charter}                  % Set font to Times
+\usepackage{graphicx}               % \includegraphics
+\usepackage{amsmath}
+\usepackage{algpseudocode} 
+\usepackage{placeins}
+\usepackage{pgfgantt}
+\usepackage{caption}
+\usepackage{amssymb}
+\usepackage{amsthm}
+\usepackage[table,xcdraw]{xcolor}
+\usepackage{tikz}
+\usepackage{bm,nicefrac}
+\usepackage{amssymb}
+\usepackage{tabularx} % For creating tables that span the width of the page
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{amsmath}
+\usepackage{mathtools}
+\usepackage{booktabs}
+\usepackage{parskip}
+\usepackage[all]{nowidow}
+\usepackage{adjustbox}
+\usepackage{array}
+\usepackage{booktabs}  
+\usepackage{varioref} % Hyperlinks references
+\usepackage[bookmarks=true,bookmarksopen=true]{hyperref} 
+\usepackage{cleveref} 
+\usepackage{natbib} \input{natbib-add}
+\usepackage{subcaption}
+\bibliographystyle{named-wits}
+\bibpunct{[}{]}{;}{a}{}{}  % to get correct punctuation for bibliography
+\setlength{\skip\footins}{1.5cm}
+\newcommand{\citets}[1]{\citeauthor{#1}'s \citeyearpar{#1}}
+\renewcommand\bibname{References}  
+\renewcommand{\topfraction}{.85}
+\renewcommand{\bottomfraction}{.7}
+\renewcommand{\textfraction}{.15}
+\renewcommand{\floatpagefraction}{.66}
+
+\pagestyle{headings}
+
+\pagestyle{plain}
+\pagenumbering{roman}
+
+\renewenvironment{abstract}{\ \vfill\begin{center}\textbf{Abstract}\end{center}\addcontentsline{toc}{section}{Abstract}}{\vfill\vfill\newpage}
+\newenvironment{declaration}{\ \vfill\begin{center}\textbf{Declaration}\end{center}\addcontentsline{toc}{section}{Declaration}}{\vfill\vfill\newpage}
+\newenvironment{ethics}{\ \vfill\begin{center}\textbf{Ethical Use Of AI}\end{center}\addcontentsline{toc}{section}{Ethical Use Of AI}}{\vfill\vfill\newpage}
+\newenvironment{acknowledgements}{\ \vfill\begin{center}\textbf{Acknowledgements}\end{center}\addcontentsline{toc}{section}{Acknowledgements}}{\vfill\vfill\newpage}
+
+\begin{document}
+\onecolumn
+\thispagestyle{empty}
+
+\setcounter{page}{0}
+\addcontentsline{toc}{chapter}{Preface}
+\ 
+\begin{center}
+  \vfill
+  {
+  \huge \bf \textsc{Compositional Generative Models for Out-of-Distribution Generation}\\
+  \vspace{2em}
+  \large School of Computer Science \& Applied Mathematics\\
+  \large University of the Witwatersrand\\[20pt]
+  \normalsize
+  Molefe Molefe \\
+  1858893 \\[20pt]
+  Supervised by Dr. Devon Jarvis and Prof. Richard Klein  \\[10pt]
+  December 4, 2025
+  }
+
+  \vfill
+  \vfill
+  \includegraphics[width=1.5cm]{images/wits}
+  \vspace{10pt}\\
+  \small{A proposal submitted to the Faculty of Science, University of the Witwatersrand, Johannesburg,
+in partial fulfilment of the requirements for the degree of PhD in Computer Science}\\
+\end{center}
+\vfill
+\newpage
+
+\pagestyle{plain}
+\setcounter{page}{1}
+
+\phantomsection
+\include{chapters/abstract/abstract}
+
+\phantomsection
+\include{chapters/declaration/declaration}
+
+\phantomsection
+\addcontentsline{toc}{section}{Table of Contents}
+\tableofcontents
+\newpage
+\pagenumbering{arabic}
+
+% \include{chapters/introduction/introduction}
+
+% \include{chapters/background/background}
+
+% \include{chapters/related_works/related_works}
+
+\include{chapters/research_objectives/main}
+
+\include{chapters/research_method/main}
+
+% \include{chapters/conclusion/conclusion}
+
+\bibliography{references/generative_modeling/generative_models,
+references/generative_modeling/diffusion,
+references/generative_modeling/autoregressive_models,
+references/generative_modeling/gans,
+references/generative_modeling/survey,
+references/generative_modeling/attention,
+references/generative_modeling/compositional_diffusion,
+references/generative_modeling/large_models/vlms,
+references/statistics/statistical_physics,
+references/blogs,
+references/medical_imaging/survey,
+references/medical_imaging/datasets,
+references/medical_imaging/dgm,
+references/medical_imaging/diffusion_models,
+references/medical_imaging/silico_tb,
+references/medical_imaging/image_reconstruction,
+references/medical_imaging/image_to_image_translation,
+references/medicine/radiology
+}
+\addcontentsline{toc}{chapter}{References}
+\end{document}

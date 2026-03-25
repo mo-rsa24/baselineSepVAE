@@ -1,0 +1,9 @@
+\section{Introduction}
+\label{sec:research_objectives_introduction}
+Text-to-image diffusion models are routinely used for compositional generation — creating images that contain multiple concepts, satisfy multiple constraints, or blend multiple attributes. Two fundamentally different approaches exist, and they are almost never distinguished:
+
+Semantic composition encodes the composition into a natural-language prompt. Writing "a cat and a dog" asks the model to find the learned representation of that phrase in its training distribution. This is fast, intuitive, and produces visually coherent images — but it is ultimately a lookup in a corpus-statistics table. The model generates what images captioned with "a cat and a dog" looked like during training.
+
+Logical composition (SuperDiff AND, product-of-experts) does not use a joint prompt. It runs separate score networks for each concept — one for "a cat", one for "a dog" — and combines their score functions at every denoising step. The result is defined by the joint probability density under both individual models, not by any single conditioning vector. This is compositionally correct by construction, but it bypasses the learned language-to-image associations entirely.
+
+The problem. These two paradigms are frequently treated as interchangeable alternatives, or as members of the same family of methods. Papers benchmark them side by side as if the difference were only quantitative. This paper argues they are structurally distinct operations, that conflating them leads to wrong conclusions about what each can and cannot express, and that the right framework is not to choose between them but to understand exactly where and how they diverge — and how to bridge that gap.

@@ -1,0 +1,49 @@
+\section{Research Goals}
+\label{sec:research_objectives_research_goal}
+
+The research is organised around three goals that build on one another sequentially:
+the first characterises the problem, the second identifies its cause, and the third
+validates the solution under real-world conditions.
+
+\begin{enumerate}
+
+    \item \textbf{Characterise the Composability Gap.}
+    Logical composition is most reliable when the composed conditions affect the data distribution in approximately separable ways.
+    When dependencies or interactions between conditions are pronounced, composition can fail: the resulting outputs may not faithfully represent either condition, or may blend them incoherently.
+    Our goal is to identify the
+    conditions under which the gap between logical and semantic composition is
+    significant, and to establish a principled framework for measuring it.
+    Closing this gap would enable composable inference to generate complex, unseen
+    combinations of conditions without requiring large joint training datasets.
+
+    \item \textbf{Determine the Cause of the Composability Gap and How to Close It.}
+    Once the gap is characterised, the central question is what causes it and what is
+    required to close it.
+    The second goal is to determine whether the gap arises from how concepts are
+    represented in latent space, how they are combined during inference, or both.
+    This matters because it identifies where intervention is needed and whether
+    reliable composition depends on better inference rules, better representations,
+    or a combination of the two.
+    A successful outcome is a clear account of the mechanism behind the gap and a
+    principled basis for deciding how compositional generative models should be
+    designed to produce semantically faithful outputs.
+
+    \item \textbf{Demonstrate the Practical Utility of Factorised Composition.}
+    To demonstrate that factorised composition can be used to generate novel and
+    semantically meaningful outputs that are not easily achievable through large models.
+    We restrict our domain to medical imaging, as it presents conditions that are
+    well-suited to demonstrating the value of compositional control.
+    Disease conditions are discrete and annotatable, and their co-occurrence is
+    clinically meaningful.
+    At the same time, rare combinations are chronically underrepresented in
+    available data.
+    The goal is to show that representing disease conditions as independent latent
+    concepts enables the generation of ecologically valid co-morbid presentations by
+    composing per-pathology models during inference without having seen those
+    combinations during training.
+    This is particularly valuable in low-resource settings where co-morbid presentations
+    are absent from available data, such as silicosis-tuberculosis.
+    The broader claim is that approximate clinical independence between conditions is
+    sufficient for this to work: exact mathematical independence is not required.
+
+\end{enumerate}

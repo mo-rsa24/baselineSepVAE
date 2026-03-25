@@ -27,7 +27,10 @@ os.environ.setdefault('TF_GPU_ALLOCATOR', 'cuda_malloc_async')
 os.environ.setdefault('GLOG_minloglevel',         '3')
 
 import argparse
+import json
+import random
 from datetime import datetime
+from functools import partial
 from pathlib import Path
 
 import jax
@@ -37,7 +40,7 @@ import optax
 from flax.training.train_state import TrainState
 from flax.serialization import to_bytes, msgpack_restore, from_state_dict
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 
 from datasets.VinBigData import VinBigDataPairDataset, jax_pair_collate_fn
 from losses.sep_vae_losses import (
@@ -53,6 +56,21 @@ except ImportError:
     wandb = None
     _WANDB = False
 
+# ── Diagnostic helpers (imported lazily at first use to avoid import-time cost)
+try:
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from scripts.plot_training_scenarios import make_scenario_overlay as _make_scenario_overlay
+    from scripts.eval_counterfactual import run_counterfactual_eval as _run_counterfactual_eval
+    from scripts.make_scaffolding import run_scaffolding as _run_scaffolding
+    _DIAG = True
+except Exception as _diag_err:
+    _make_scenario_overlay  = None
+    _run_counterfactual_eval = None
+    _run_scaffolding         = None
+    _DIAG = False
+    print(f"[warn] Diagnostic scripts not loaded: {_diag_err}")
+
 
 def parse_args():
     p = argparse.ArgumentParser("Binary SepVAE trainer (Normal vs. Cardiomegaly)")
@@ -62,6 +80,8 @@ def parse_args():
     p.add_argument("--csv_path",   type=str, default="/datasets/mmolefe/vinbigdata/train.csv")
     p.add_argument("--use_cache",  action="store_true",
                    help="Load pre-cached .npy files instead of raw DICOMs.")
+    p.add_argument("--deterministic_data", action=argparse.BooleanOptionalAction, default=True,
+                   help="Deterministic pair construction, loader seeding, and eval subset selection.")
     p.add_argument("--img_size",   type=int, default=256)
     p.add_argument("--exclude_cross_disease_overlap", action="store_true")
 
@@ -72,6 +92,11 @@ def parse_args():
                    help="Enable BboxCrossAttnHead (D1+). D0 uses learned query only.")
     p.add_argument("--attn_heads",          type=int, default=4,
                    help="Number of self-attention heads in ResNet-50 bottleneck (V2).")
+    p.add_argument("--decoder_res_blocks",  type=int, default=2,
+                   help="ResBlockSE count per decoder level (V2). Default=2 (D0–D1). "
+                        "Set to 3 for D2+ — Flax names blocks by loop index so "
+                        "existing ResBlockSE_0/1 weights restore cleanly from a "
+                        "D1 checkpoint; only ResBlockSE_2 is freshly initialised.")
     p.add_argument("--perceptual_only",     action="store_true",
                    help="Use CheSS as frozen perceptual loss extractor only (D4). "
                         "Does NOT inject CheSS weights into the encoder.")
@@ -92,17 +117,37 @@ def parse_args():
     p.add_argument("--weight_kl_disease",    type=float, default=5e-5)
     p.add_argument("--weight_mi_factor",     type=float, default=1.0)
     p.add_argument("--weight_bbox_attn",     type=float, default=0.0)
+    p.add_argument("--weight_cardio_supcon", type=float, default=0.05)
     p.add_argument("--weight_perceptual",    type=float, default=0.0)
     p.add_argument("--weight_gan",           type=float, default=0.0,
                    help="PatchGAN hinge generator loss weight (D5+). 0=disabled.")
     p.add_argument("--weight_tv",            type=float, default=0.0,
                    help="Total variation loss weight — suppresses stripe artifacts (D5+).")
+    p.add_argument("--weight_masked_rec",    type=float, default=0.0,
+                   help="Masked anatomy recon weight: outside-bbox MSE with z_cardio=0. "
+                        "Forces z_common not to encode cardiac shape. 0=disabled.")
     p.add_argument("--gan_start_step",       type=int,   default=5000,
-                   help="Global step at which PatchGAN loss activates. Lets VAE stabilise first.")
+                   help="Steps from the START OF THIS RUN before PatchGAN activates. "
+                        "Counted from phase_start_global_step (not absolute global_step), "
+                        "so resuming D5 from a D4 checkpoint still gives a proper warm-up.")
+    p.add_argument("--disc_r1_penalty",      type=float, default=10.0,
+                   help="R1 gradient penalty weight for PatchGAN discriminator. "
+                        "Penalises ||∇_x D(x_real)||^2 — prevents discriminator from "
+                        "overfitting and dominating the generator. Standard value: 10.0. "
+                        "Set 0 to disable.")
     p.add_argument("--lr_patch_disc",        type=float, default=1e-4,
                    help="Learning rate for PatchGAN discriminator optimizer.")
     p.add_argument("--sigma_inactive",       type=float, default=0.1)
+    p.add_argument("--supcon_temperature",   type=float, default=0.1)
     p.add_argument("--kl_warmup_epochs",     type=int,   default=0)
+    p.add_argument("--kl_free_bits",         type=float, default=0.0,
+                   help="Per-dim KL floor in nats: clamp KL(dim) >= value before summing. "
+                        "Prevents posterior collapse and bounds step-to-step KL variance. "
+                        "0 = disabled (legacy). Recommended: 0.5 for 16x16x16 latents.")
+    p.add_argument("--bbox_query_mix",       type=float, default=0.7,
+                   help="Blend weight for bbox-guided query vs learned fallback query.")
+    p.add_argument("--bbox_dropout_prob",    type=float, default=0.3,
+                   help="Drop bbox guidance from the query path on positive samples only.")
 
     # Optimizers
     p.add_argument("--lr_vae",       type=float, default=1e-4)
@@ -116,6 +161,7 @@ def parse_args():
     p.add_argument("--batch_size",   type=int, default=8)
     p.add_argument("--epochs",       type=int, default=100)
     p.add_argument("--num_workers",  type=int, default=8)
+    p.add_argument("--eval_num_workers", type=int, default=0)
     p.add_argument("--seed",         type=int, default=0)
 
     # Logging & checkpoints
@@ -128,8 +174,11 @@ def parse_args():
     p.add_argument("--manifold_every",       type=int, default=-1,
                    help="Manifold plot cadence (-1=match sample_every, 0=disable)")
     p.add_argument("--manifold_max_samples", type=int, default=600)
+    p.add_argument("--eval_subset_size",     type=int, default=1024)
     p.add_argument("--manifold_method",      type=str, default="pca",
                    choices=["pca", "tsne", "both"])
+    p.add_argument("--manifold_bbox_mode",   type=str, default="both",
+                   choices=["bbox_free", "bbox_guided", "both"])
 
     # EMA
     p.add_argument("--ema_decay", type=float, default=0.999)
@@ -149,6 +198,13 @@ def parse_args():
 def ensure_dir(path):
     os.makedirs(path, exist_ok=True)
     return path
+
+
+def seed_data_worker(worker_id, base_seed):
+    worker_seed = int(base_seed) + int(worker_id)
+    random.seed(worker_seed)
+    np.random.seed(worker_seed % (2 ** 32))
+    torch.manual_seed(worker_seed)
 
 
 # ============================================================================
@@ -180,8 +236,15 @@ def make_recon_grid(x_input, x_rec, labels, n_per_class=4):
 def make_attention_grid(x_input, attn_maps, labels, n_per_class=4,
                         bboxes_cardio=None):
     """
-    Two-row panel: Normal | Cardiomegaly.
-    Each sample shown as: CXR | cardio attention map (with GT bbox overlay).
+    Two-row panel (Normal / Cardiomegaly).
+    Each sample: 3 sub-columns — CXR | α-blended overlay | CXR+bbox+attn contour.
+
+    Improvements vs original:
+      - 3 columns per sample instead of 2 (overlay + contour column)
+      - Global colorscale anchor: vmax = 99th-percentile of ALL attn values
+        → Normal row shows near-zero heat; Cardiomegaly row shows strong activation
+      - Row labels on y-axis of first column
+      - Per-sample caption: attn peak intensity + CTR proxy (blob width / img width)
     """
     import matplotlib
     matplotlib.use('Agg')
@@ -190,12 +253,15 @@ def make_attention_grid(x_input, attn_maps, labels, n_per_class=4,
     from PIL import Image
 
     x_01      = (np.array(x_input) + 1.0) / 2.0
-    attn_ca   = np.array(attn_maps['cardiomegaly'])
+    attn_ca   = np.array(attn_maps['cardiomegaly'])   # (2B, H_lat, W_lat)
     labels_np = np.array(labels)
-    B_full    = x_01.shape[0]
-    B         = B_full // 2
+    B         = x_01.shape[0] // 2
 
-    def _draw_bbox(ax, bbox_norm, img_h, img_w, color):
+    # Global colour anchor — prevents normal row being artificially saturated
+    global_vmax = float(np.percentile(attn_ca, 99)) if attn_ca.size > 0 else 1.0
+    global_vmax = max(global_vmax, 1e-6)
+
+    def _draw_bbox(ax, bbox_norm, img_h, img_w, color='lime', lw=1.2):
         if bbox_norm is None:
             return
         x0n, y0n, x1n, y1n = bbox_norm
@@ -204,65 +270,178 @@ def make_attention_grid(x_input, attn_maps, labels, n_per_class=4,
         rect = mpatches.Rectangle(
             (x0n * img_w, y0n * img_h),
             (x1n - x0n) * img_w, (y1n - y0n) * img_h,
-            linewidth=1.2, edgecolor=color, facecolor='none',
+            linewidth=lw, edgecolor=color, facecolor='none',
         )
         ax.add_patch(rect)
 
+    def _ctr_proxy(attn_2d):
+        """Blob horizontal extent / image width as a simple CTR proxy."""
+        thresh = 0.30 * attn_2d.max() if attn_2d.max() > 0 else 0
+        mask   = attn_2d > thresh
+        cols   = np.where(mask.any(axis=0))[0]
+        if len(cols) < 2:
+            return 0.0
+        return float((cols[-1] - cols[0] + 1) / attn_2d.shape[1])
+
     n_rows    = 2
-    n_subcols = 2
+    n_subcols = 3   # CXR | overlay | contour
     n_cols    = n_per_class * n_subcols
 
-    fig, axes = plt.subplots(n_rows, n_cols,
-                             figsize=(n_per_class * n_subcols * 1.8, n_rows * 2.2))
+    fig, axes = plt.subplots(
+        n_rows, n_cols,
+        figsize=(n_per_class * n_subcols * 1.6, n_rows * 2.4),
+    )
     if n_rows == 1: axes = axes[None, :]
     if n_cols == 1: axes = axes[:, None]
 
     class_names = ['Normal', 'Cardiomegaly']
+    col_headers = ['CXR', 'attn overlay', 'bbox + contour']
 
     for row, cls_id in enumerate([0, 1]):
         idxs = np.where(labels_np == cls_id)[0][:n_per_class]
 
         for col_pos, idx in enumerate(idxs):
-            img = x_01[idx, :, :, 0]
-            H, W = img.shape
-            base = col_pos * n_subcols
-            within_cls = idx - B if cls_id == 1 else None
+            img      = x_01[idx, :, :, 0]        # (H, W) in [0,1]
+            H, W     = img.shape
+            base     = col_pos * n_subcols
+            # Within-class index (used for bbox lookup in cardio)
+            within_cls = int(idx - B) if cls_id == 1 else None
 
+            # Upsample attention to full image resolution (jax bilinear, no scipy)
+            attn_raw = attn_ca[idx]               # (H_lat, W_lat)
+            attn_up  = np.array(
+                jax.image.resize(attn_raw[..., None], (H, W, 1), method='linear')[:, :, 0]
+            )
+
+            peak     = float(attn_raw.max())
+            ctr      = _ctr_proxy(attn_raw)
+
+            # Sub-col 0: plain CXR
             ax = axes[row, base]
             ax.imshow(img, cmap='gray', vmin=0, vmax=1)
             ax.axis('off')
             if col_pos == 0:
-                ax.set_ylabel(class_names[cls_id], fontsize=8)
-            if row == 0 and col_pos == 0:
-                ax.set_title('CXR', fontsize=7)
+                ax.set_ylabel(class_names[cls_id], fontsize=8, labelpad=4)
+            if row == 0:
+                ax.set_title(col_headers[0], fontsize=7)
+            ax.set_xlabel(f'peak={peak:.2f}\nCTR≈{ctr:.2f}', fontsize=5.5, labelpad=2)
 
+            # Sub-col 1: α-blended overlay (globally anchored)
             ax = axes[row, base + 1]
             ax.imshow(img, cmap='gray', vmin=0, vmax=1)
-            ax.imshow(attn_ca[idx], cmap='hot', alpha=0.5,
+            ax.imshow(attn_up, cmap='hot', alpha=0.55,
+                      vmin=0, vmax=global_vmax,
                       extent=(0, W, H, 0), interpolation='bilinear')
+            ax.axis('off')
+            if row == 0 and col_pos == 0:
+                ax.set_title(col_headers[1], fontsize=7)
+
+            # Sub-col 2: contour + GT bbox
+            ax = axes[row, base + 2]
+            ax.imshow(img, cmap='gray', vmin=0, vmax=1)
+            # Attn contour at 30 % of global max
+            contour_thresh = 0.30 * global_vmax
+            if attn_up.max() > contour_thresh:
+                ax.contour(attn_up, levels=[contour_thresh],
+                           colors=['orangered'], linewidths=[1.0],
+                           extent=(0, W, 0, H))
             if cls_id == 1 and within_cls is not None and bboxes_cardio is not None:
                 if 0 <= within_cls < len(bboxes_cardio):
                     _draw_bbox(ax, bboxes_cardio[within_cls], H, W, color='lime')
             ax.axis('off')
             if row == 0 and col_pos == 0:
-                ax.set_title('Cardio attn', fontsize=7)
+                ax.set_title(col_headers[2], fontsize=7)
 
+        # Blank out unused columns
         for col_pos in range(len(idxs), n_per_class):
             for sub in range(n_subcols):
                 axes[row, col_pos * n_subcols + sub].axis('off')
 
     plt.tight_layout(pad=0.3)
     buf = __import__('io').BytesIO()
+    plt.savefig(buf, format='png', dpi=130, bbox_inches='tight')
+    plt.close(fig)
+    buf.seek(0)
+    return Image.open(buf).copy()
+
+
+def _make_kl_heatmap(model, params, x_normal, x_cardio):
+    """
+    2-class per-channel KL heatmap (no scipy / 3-class dependency).
+
+    Layout: 2 subplots — Common head | Cardiomegaly head.
+      Rows (Y): Normal / Cardiomegaly.
+      Cols (X): latent channel index.
+      Colour:   mean KL averaged over batch + spatial dims.
+
+    Ideal: Cardio head shows HIGH KL for Cardiomegaly row, near-zero for Normal.
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    import io
+    from PIL import Image
+
+    variables    = {'params': params}
+    head_keys    = ['common', 'cardiomegaly']
+    head_titles  = {'common': 'Common head', 'cardiomegaly': 'Cardiomegaly head'}
+    class_inputs = {'Normal': x_normal, 'Cardiomegaly': x_cardio}
+    class_order  = ['Normal', 'Cardiomegaly']
+
+    kl_by_head_class = {h: {} for h in head_keys}
+    for cls_name, x in class_inputs.items():
+        ld = model.apply(variables, x, method=model.encode)
+        for head in head_keys:
+            mu, logvar = ld[head]
+            kl_elem = 0.5 * (jnp.square(mu) + jnp.exp(logvar) - 1.0 - logvar)
+            reduce_axes = tuple(range(kl_elem.ndim - 1))  # all dims except channel
+            kl_by_head_class[head][cls_name] = np.array(jnp.mean(kl_elem, axis=reduce_axes))
+
+    fig, axes = plt.subplots(1, 2, figsize=(10, 2.8), gridspec_kw={'wspace': 0.35})
+    for ax, head in zip(axes, head_keys):
+        mat  = np.stack([kl_by_head_class[head][cls] for cls in class_order], axis=0)  # (2, C)
+        vmax = float(np.percentile(mat, 98)) if mat.max() > 0 else 1.0
+        im   = ax.imshow(mat, aspect='auto', cmap='YlOrRd', vmin=0.0, vmax=vmax,
+                         interpolation='nearest')
+        ax.set_title(head_titles[head], fontsize=10, pad=4)
+        ax.set_xticks(range(mat.shape[1]))
+        ax.set_xticklabels([f'ch{i}' for i in range(mat.shape[1])], fontsize=6)
+        ax.set_yticks(range(2))
+        ax.set_yticklabels(class_order, fontsize=9)
+        ax.set_xlabel('Channel', fontsize=8)
+        for r in range(2):
+            for c in range(mat.shape[1]):
+                val     = mat[r, c]
+                txt_col = 'white' if val > 0.65 * vmax else 'black'
+                ax.text(c, r, f'{val:.2f}', ha='center', va='center',
+                        fontsize=6.0, color=txt_col, fontweight='bold')
+        cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        cbar.set_label('KL (nats)', fontsize=7)
+
+    fig.suptitle(
+        'Per-Channel KL Divergence by Class\n'
+        'Ideal: Cardio head HIGH only for Cardiomegaly row',
+        fontsize=8,
+    )
+    buf = io.BytesIO()
     plt.savefig(buf, format='png', dpi=120, bbox_inches='tight')
     plt.close(fig)
     buf.seek(0)
     return Image.open(buf).copy()
 
 
-def save_latent_manifold_plot(model, vae_params, vae_batch_stats, loader,
-                               save_path, max_samples=600, method="pca",
-                               use_bbox_cross_attn=False):
-    """PCA/t-SNE scatter of common + cardio heads with silhouette scores."""
+def save_latent_manifold_plot(
+    model,
+    vae_params,
+    vae_batch_stats,
+    loader,
+    save_path,
+    max_samples=600,
+    method="pca",
+    use_bbox_cross_attn=False,
+    bbox_mode="both",
+):
+    """PCA/t-SNE scatter of common + cardio heads with deterministic eval modes."""
     from sklearn.decomposition import PCA
     from sklearn.manifold import TSNE
     from sklearn.metrics import silhouette_score
@@ -272,66 +451,157 @@ def save_latent_manifold_plot(model, vae_params, vae_batch_stats, loader,
     if vae_batch_stats:
         variables['batch_stats'] = vae_batch_stats
 
-    lc, lcard, lbls = [], [], []
+    if use_bbox_cross_attn:
+        modes = ['bbox_free', 'bbox_guided'] if bbox_mode == 'both' else [bbox_mode]
+    else:
+        modes = ['bbox_free']
+
+    def encode_latents(x, bbox=None, has_bbox=None):
+        if use_bbox_cross_attn:
+            return model.apply(
+                variables,
+                x,
+                bbox=bbox,
+                has_bbox=has_bbox,
+                method=model.encode,
+            )
+        return model.apply(variables, x, method=model.encode)
+
+    per_mode = {
+        mode: {'common': [], 'cardio': [], 'labels': []}
+        for mode in modes
+    }
 
     for batch_torch in loader:
-        if len(lbls) >= max_samples:
+        current_total = len(per_mode[modes[0]]['labels'])
+        if current_total >= max_samples:
             break
-        for img_key, label_val in [('x_norm', 0), ('x_disease1', 1)]:
-            x  = jnp.array(batch_torch[img_key].permute(0, 2, 3, 1).numpy())
-            # For V2 cross-attn: pass None bbox → BboxCrossAttnHead uses fallback query
-            ld = model.apply(variables, x, method=model.encode)
-            remaining = max_samples - len(lbls)
+
+        x_norm = jnp.array(batch_torch['x_norm'].permute(0, 2, 3, 1).numpy())
+        x_cardio = jnp.array(batch_torch['x_disease1'].permute(0, 2, 3, 1).numpy())
+        bbox_cardio = jnp.array(batch_torch['bbox_disease1'].numpy())
+
+        bbox_zero_norm = jnp.zeros((x_norm.shape[0], 4), dtype=jnp.float32)
+        has_bbox_zero_norm = jnp.zeros((x_norm.shape[0],), dtype=jnp.float32)
+        bbox_zero_cardio = jnp.zeros_like(bbox_cardio)
+        has_bbox_zero_cardio = jnp.zeros((x_cardio.shape[0],), dtype=jnp.float32)
+        has_bbox_guided_cardio = (
+            (bbox_cardio[:, 2] - bbox_cardio[:, 0]) > 1e-4
+        ).astype(jnp.float32)
+
+        for mode in modes:
+            ld_norm = encode_latents(
+                x_norm,
+                bbox=bbox_zero_norm,
+                has_bbox=has_bbox_zero_norm,
+            )
+            if mode == 'bbox_guided':
+                ld_cardio = encode_latents(
+                    x_cardio,
+                    bbox=bbox_cardio,
+                    has_bbox=has_bbox_guided_cardio,
+                )
+            else:
+                ld_cardio = encode_latents(
+                    x_cardio,
+                    bbox=bbox_zero_cardio,
+                    has_bbox=has_bbox_zero_cardio,
+                )
+
+            remaining = max_samples - len(per_mode[mode]['labels'])
             if remaining <= 0:
-                break
-            z_c  = np.array(jnp.mean(ld['common'][0],       axis=(1, 2)))[:remaining]
-            z_ca = np.array(jnp.mean(ld['cardiomegaly'][0], axis=(1, 2)))[:remaining]
-            lc.extend(z_c); lcard.extend(z_ca)
-            lbls.extend([label_val] * len(z_c))
+                continue
 
-    lc    = np.array(lc)
-    lcard = np.array(lcard)
-    lbls  = np.array(lbls)
+            z_c_norm = np.array(jnp.mean(ld_norm['common'][0], axis=(1, 2)))
+            z_ca_norm = np.array(jnp.mean(ld_norm['cardiomegaly'][0], axis=(1, 2)))
+            z_c_cardio = np.array(jnp.mean(ld_cardio['common'][0], axis=(1, 2)))
+            z_ca_cardio = np.array(jnp.mean(ld_cardio['cardiomegaly'][0], axis=(1, 2)))
 
-    if len(lbls) < 2:
+            take_norm = min(z_c_norm.shape[0], remaining // 2 if remaining > 1 else remaining)
+            take_cardio = min(z_c_cardio.shape[0], remaining - take_norm)
+
+            if take_norm > 0:
+                per_mode[mode]['common'].extend(z_c_norm[:take_norm])
+                per_mode[mode]['cardio'].extend(z_ca_norm[:take_norm])
+                per_mode[mode]['labels'].extend([0] * take_norm)
+            if take_cardio > 0:
+                per_mode[mode]['common'].extend(z_c_cardio[:take_cardio])
+                per_mode[mode]['cardio'].extend(z_ca_cardio[:take_cardio])
+                per_mode[mode]['labels'].extend([1] * take_cardio)
+
+    if len(per_mode[modes[0]]['labels']) < 2:
         return {}
 
-    feature_sets = {
-        'all_heads':    np.concatenate([lc, lcard], axis=1),
-        'disease_only': lcard,
-    }
-    set_titles = {
-        'all_heads':    'All heads (common + cardio)',
-        'disease_only': 'Cardio head only',
-    }
     methods = ['pca', 'tsne'] if method == 'both' else [method]
     metrics = {}
     colors  = ['blue', 'green']
     names   = ['Normal', 'Cardiomegaly']
+    set_titles = {
+        'all_heads': 'All heads (common + cardio)',
+        'disease_only': 'Cardio head only',
+    }
 
-    fig, axes = plt.subplots(len(feature_sets), len(methods),
-                             figsize=(7 * len(methods), 5 * len(feature_sets)),
-                             squeeze=False)
+    fig, axes = plt.subplots(
+        2,
+        max(len(methods) * len(modes), 1),
+        figsize=(7 * max(len(methods) * len(modes), 1), 10),
+        squeeze=False,
+    )
 
-    for row_idx, (set_name, feats) in enumerate(feature_sets.items()):
-        for col_idx, m in enumerate(methods):
-            ax = axes[row_idx][col_idx]
-            reducer = (TSNE(n_components=2, random_state=42,
-                            perplexity=min(30, max(5, len(feats) // 4)))
-                       if m == 'tsne' else PCA(n_components=2, random_state=42))
-            z2 = reducer.fit_transform(feats)
-            for d in [0, 1]:
-                mask = lbls == d
-                ax.scatter(z2[mask, 0], z2[mask, 1],
-                           c=colors[d], label=names[d], alpha=0.6, s=20)
-            try:
-                sil = float(silhouette_score(z2, lbls))
-            except ValueError:
-                sil = float('nan')
-            metrics[f'silhouette_{set_name}_{m}'] = sil
-            sil_str = f"{sil:.3f}" if np.isfinite(sil) else "N/A"
-            ax.set_title(f"{set_titles[set_name]} ({m.upper()}) — sil={sil_str}")
-            ax.legend(); ax.grid(True, alpha=0.3)
+    for mode_idx, mode in enumerate(modes):
+        lc = np.array(per_mode[mode]['common'])
+        lcard = np.array(per_mode[mode]['cardio'])
+        lbls = np.array(per_mode[mode]['labels'])
+
+        cardio_norm = np.linalg.norm(lcard, axis=1)
+        inactive_mask = lbls == 0
+        active_mask = lbls == 1
+        inactive_norm = float(cardio_norm[inactive_mask].mean()) if inactive_mask.any() else float('nan')
+        active_norm = float(cardio_norm[active_mask].mean()) if active_mask.any() else float('nan')
+        ratio = float(active_norm / max(inactive_norm, 1e-6)) if np.isfinite(active_norm) and np.isfinite(inactive_norm) else float('nan')
+
+        metrics[f'z_cardio_norm_inactive_{mode}'] = inactive_norm
+        metrics[f'z_cardio_norm_active_{mode}'] = active_norm
+        metrics[f'z_cardio_norm_ratio_{mode}'] = ratio
+
+        feature_sets = {
+            'all_heads': np.concatenate([lc, lcard], axis=1),
+            'disease_only': lcard,
+        }
+
+        for row_idx, (set_name, feats) in enumerate(feature_sets.items()):
+            for method_idx, m in enumerate(methods):
+                col_idx = mode_idx * len(methods) + method_idx
+                ax = axes[row_idx][col_idx]
+                reducer = (
+                    TSNE(
+                        n_components=2,
+                        random_state=42,
+                        perplexity=min(30, max(5, len(feats) // 4)),
+                    )
+                    if m == 'tsne'
+                    else PCA(n_components=2, random_state=42)
+                )
+                z2 = reducer.fit_transform(feats)
+                for d in [0, 1]:
+                    mask = lbls == d
+                    ax.scatter(
+                        z2[mask, 0],
+                        z2[mask, 1],
+                        c=colors[d],
+                        label=names[d],
+                        alpha=0.6,
+                        s=20,
+                    )
+                try:
+                    sil = float(silhouette_score(z2, lbls))
+                except ValueError:
+                    sil = float('nan')
+                metrics[f'silhouette_{set_name}_{m}_{mode}'] = sil
+                sil_str = f"{sil:.3f}" if np.isfinite(sil) else "N/A"
+                ax.set_title(f"{set_titles[set_name]} ({m.upper()}, {mode}) — sil={sil_str}")
+                ax.legend()
+                ax.grid(True, alpha=0.3)
 
     plt.tight_layout()
     plt.savefig(str(save_path), dpi=150)
@@ -349,6 +619,7 @@ def main():
     if args.manifold_every < 0:
         args.manifold_every = args.sample_every
 
+    random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     rng = jax.random.PRNGKey(args.seed)
@@ -371,6 +642,7 @@ def main():
     samples_dir = ensure_dir(output_dir / "samples")
     manifold_dir = ensure_dir(output_dir / "manifold")
     diag_dir    = ensure_dir(output_dir / "diagnostics")
+    metrics_history_path = output_dir / "metrics_history.jsonl"
     print(f"Output: {output_dir}")
 
     # ── W&B ───────────────────────────────────────────────────────────────────
@@ -391,11 +663,65 @@ def main():
         img_size=args.img_size,
         exclude_cross_disease_overlap=getattr(args, 'exclude_cross_disease_overlap', False),
         use_cache=args.use_cache,
+        deterministic_pairs=args.deterministic_data,
+        pair_seed=args.seed,
     )
-    loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True,
-                        num_workers=args.num_workers, collate_fn=jax_pair_collate_fn,
-                        drop_last=True)
+    train_loader_generator = None
+    worker_init_fn = None
+    if args.deterministic_data:
+        train_loader_generator = torch.Generator()
+        train_loader_generator.manual_seed(args.seed)
+        worker_init_fn = partial(seed_data_worker, base_seed=args.seed)
+
+    loader = DataLoader(
+        dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=args.num_workers,
+        collate_fn=jax_pair_collate_fn,
+        drop_last=True,
+        worker_init_fn=worker_init_fn,
+        generator=train_loader_generator,
+    )
     print(f"Dataset: {len(dataset)} pairs, {len(loader)} steps/epoch")
+
+    n_eval_pairs = min(max(args.eval_subset_size // 2, 1), len(dataset))
+    if args.deterministic_data:
+        eval_rng = np.random.default_rng(args.seed)
+        eval_indices = np.sort(eval_rng.choice(len(dataset), size=n_eval_pairs, replace=False))
+    else:
+        eval_indices = np.arange(n_eval_pairs)
+
+    eval_subset = Subset(dataset, eval_indices.tolist())
+    eval_loader = DataLoader(
+        eval_subset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=args.eval_num_workers,
+        collate_fn=jax_pair_collate_fn,
+        drop_last=False,
+    )
+    eval_subset_ids = []
+    for idx in eval_indices.tolist():
+        norm_id, cardio_id = dataset.get_pair_ids(idx)
+        eval_subset_ids.append({
+            'pair_index': int(idx),
+            'normal_id': norm_id,
+            'cardio_id': cardio_id,
+        })
+    with open(output_dir / "eval_subset_ids.json", "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                'seed': args.seed,
+                'deterministic_data': bool(args.deterministic_data),
+                'pair_count': n_eval_pairs,
+                'eval_subset_size': int(n_eval_pairs * 2),
+                'pairs': eval_subset_ids,
+            },
+            f,
+            indent=2,
+        )
+    print(f"Eval subset: {n_eval_pairs} fixed pairs ({n_eval_pairs * 2} images)")
 
     # ── Model ─────────────────────────────────────────────────────────────────
     if IS_V2:
@@ -406,6 +732,8 @@ def main():
             query_dim=args.attn_query_dim,
             attn_heads=args.attn_heads,
             use_bbox_cross_attn=args.use_bbox_cross_attn,
+            bbox_query_mix=args.bbox_query_mix,
+            decoder_res_blocks=args.decoder_res_blocks,
         )
         vae_batch_stats = {}   # GroupNorm — no batch_stats
         dummy_x      = jnp.ones((1, args.img_size, args.img_size, 1))
@@ -416,7 +744,8 @@ def main():
         n_vae_params = sum(p.size for p in jax.tree_util.tree_leaves(vae_params))
         print(f"SepVAEV2 parameters: {n_vae_params:,}")
         print(f"  bbox cross-attn: {args.use_bbox_cross_attn}  "
-              f"attn_heads: {args.attn_heads}  img_size: {args.img_size}")
+              f"attn_heads: {args.attn_heads}  img_size: {args.img_size}  "
+              f"decoder_res_blocks: {args.decoder_res_blocks}")
 
     else:
         # ── V1: CheSS backbone ────────────────────────────────────────────────
@@ -513,13 +842,19 @@ def main():
         print(f"Bbox attention supervision: enabled (weight={args.weight_bbox_attn})")
 
     # ── FactorVAE discriminator ────────────────────────────────────────────────
-    disc_input_dim = args.z_channels_common + args.z_channels_disease
-    discriminator  = FactorDiscriminator(hidden_dim=64)
-    rng, disc_rng  = jax.random.split(rng)
-    disc_vars      = discriminator.init(disc_rng, jnp.ones((1, disc_input_dim)))
-    disc_params    = disc_vars['params']
-    n_disc_params  = sum(p.size for p in jax.tree_util.tree_leaves(disc_params))
-    print(f"FactorDiscriminator parameters: {n_disc_params:,}")
+    use_factor_disc = args.weight_mi_factor > 0.0
+    discriminator = None
+    disc_state = None
+    if use_factor_disc:
+        disc_input_dim = args.z_channels_common + args.z_channels_disease
+        discriminator  = FactorDiscriminator(hidden_dim=64)
+        rng, disc_rng  = jax.random.split(rng)
+        disc_vars      = discriminator.init(disc_rng, jnp.ones((1, disc_input_dim)))
+        disc_params    = disc_vars['params']
+        n_disc_params  = sum(p.size for p in jax.tree_util.tree_leaves(disc_params))
+        print(f"FactorDiscriminator parameters: {n_disc_params:,}")
+    else:
+        print("FactorDiscriminator: disabled (weight_mi_factor=0)")
 
     # ── Optimizer ─────────────────────────────────────────────────────────────
     if IS_V2:
@@ -557,65 +892,154 @@ def main():
         print(f"VAE optimizer:  AdamW backbone_lr={args.lr_backbone}  "
               f"vae_lr={args.lr_vae}  wd={args.weight_decay}")
 
-    tx_disc    = optax.chain(
-        optax.clip_by_global_norm(args.grad_clip),
-        optax.adam(learning_rate=args.lr_disc),
-    )
     vae_state  = TrainState.create(apply_fn=None, params=vae_params,  tx=tx_vae)
-    disc_state = TrainState.create(apply_fn=None, params=disc_params, tx=tx_disc)
     ema_params = jax.tree_util.tree_map(jnp.array, vae_params)
-    print(f"Disc optimizer: Adam  (lr={args.lr_disc})")
+    if use_factor_disc:
+        tx_disc = optax.chain(
+            optax.clip_by_global_norm(args.grad_clip),
+            optax.adam(learning_rate=args.lr_disc),
+        )
+        disc_state = TrainState.create(apply_fn=None, params=disc_params, tx=tx_disc)
+        print(f"Disc optimizer: Adam  (lr={args.lr_disc})")
 
     # ── PatchGAN discriminator (D5) ───────────────────────────────────────────
-    # NLayerDiscriminator operates in image space (x_real vs x_rec_stale).
-    # Frozen via stop_gradient during VAE update; updated via patch_disc_step.
-    patch_discriminator = NLayerDiscriminator(in_channels=1, n_layers=3)
-    rng, patch_disc_rng = jax.random.split(rng)
-    patch_disc_vars     = patch_discriminator.init(
-        patch_disc_rng, jnp.ones((1, args.img_size, args.img_size, 1))
-    )
-    patch_disc_params   = patch_disc_vars['params']
-    n_patch_disc_params = sum(p.size for p in jax.tree_util.tree_leaves(patch_disc_params))
-    print(f"PatchGAN discriminator parameters: {n_patch_disc_params:,}")
-    tx_patch_disc  = optax.chain(
-        optax.clip_by_global_norm(args.grad_clip),
-        optax.adam(learning_rate=args.lr_patch_disc),
-    )
-    patch_disc_state = TrainState.create(apply_fn=None, params=patch_disc_params,
-                                         tx=tx_patch_disc)
-    print(f"PatchGAN optimizer: Adam  (lr={args.lr_patch_disc}  "
-          f"weight_gan={args.weight_gan}  gan_start_step={args.gan_start_step})")
+    # NLayerDiscriminator operates in image space (x_real vs x_rec). Frozen
+    # during VAE updates and only initialised when GAN training is active.
+    use_patch_disc = args.weight_gan > 0.0
+    patch_discriminator = None
+    patch_disc_state = None
+    if use_patch_disc:
+        patch_discriminator = NLayerDiscriminator(in_channels=1, n_layers=3)
+        rng, patch_disc_rng = jax.random.split(rng)
+        patch_disc_vars     = patch_discriminator.init(
+            patch_disc_rng, jnp.ones((1, args.img_size, args.img_size, 1))
+        )
+        patch_disc_params   = patch_disc_vars['params']
+        n_patch_disc_params = sum(p.size for p in jax.tree_util.tree_leaves(patch_disc_params))
+        print(f"PatchGAN discriminator parameters: {n_patch_disc_params:,}")
+        tx_patch_disc  = optax.chain(
+            optax.clip_by_global_norm(args.grad_clip),
+            optax.adam(learning_rate=args.lr_patch_disc),
+        )
+        patch_disc_state = TrainState.create(
+            apply_fn=None,
+            params=patch_disc_params,
+            tx=tx_patch_disc,
+        )
+        print(f"PatchGAN optimizer: Adam  (lr={args.lr_patch_disc}  "
+              f"weight_gan={args.weight_gan}  gan_start_step={args.gan_start_step})")
+    else:
+        print("PatchGAN discriminator: disabled (weight_gan=0)")
 
     # ── Resume ────────────────────────────────────────────────────────────────
+    def _find_new_keys(target, source, prefix=""):
+        """Collect top-level names of keys present in *target* but not in *source*."""
+        new = []
+        if not isinstance(target, dict) or not isinstance(source, dict):
+            return new
+        for k in target:
+            if k not in source:
+                new.append(f"{prefix}{k}" if prefix else k)
+            elif isinstance(target[k], dict):
+                new.extend(_find_new_keys(target[k], source[k], prefix=f"{prefix}{k}/"))
+        return new
+
+    def _merge_params(target, source):
+        """Recursively merge *source* (checkpoint) into *target* (fresh init).
+
+        For every key in *target*:
+        - If the key exists in *source*, recurse (dicts) or adopt the value (leaves).
+        - If the leaf shapes differ (e.g. decoder ch_mults 64→128 changes ResBlockSE
+          weight shapes), the target's fresh init is kept so JIT never sees a shape error.
+        - If the key is absent in *source* (e.g. newly added layer), keep *target*'s
+          freshly-initialised value so the model can still run.
+        Keys present in *source* but absent in *target* are silently dropped.
+        """
+        if not isinstance(target, dict):
+            source_arr = jnp.array(source)
+            if source_arr.shape != target.shape:
+                # Architecture change (e.g. decoder ch_mults 64→128): keep fresh init
+                print(f"    [_merge_params] shape mismatch {source_arr.shape} → {target.shape}, keeping fresh init")
+                return target
+            return source_arr
+        result = {}
+        for k, v in target.items():
+            if k in source:
+                result[k] = (_merge_params(v, source[k])
+                             if isinstance(v, dict) and isinstance(source[k], dict)
+                             else _merge_params(v, source[k]))
+            else:
+                result[k] = v   # new layer — keep fresh init
+        skipped = set(source.keys()) - set(target.keys()) if isinstance(source, dict) else set()
+        if skipped:
+            print(f"    [_merge_params] ignored stale keys: {sorted(skipped)}")
+        return result
+
     start_epoch = 1
     global_step = 0
+    phase_start_global_step = 0   # set after resume load; gan_start_step is relative to this
     if args.resume:
         with open(args.resume, 'rb') as f:
             ckpt = msgpack_restore(f.read())
-        restored_vae_params = jax.tree_util.tree_map(jnp.array, ckpt['vae_params'])
-        restored_vae_opt    = from_state_dict(vae_state.opt_state, ckpt['vae_opt_state'])
-        vae_state = vae_state.replace(params=restored_vae_params,
-                                      opt_state=restored_vae_opt,
-                                      step=int(ckpt['global_step']))
-        if 'disc_params' in ckpt:
+
+        # Partial param merge: new layers (dec_attn_32, extra ResBlockSE …) keep fresh inits.
+        ckpt_vae_raw   = jax.tree_util.tree_map(jnp.array, ckpt['vae_params'])
+        merged_params  = _merge_params(vae_state.params, ckpt_vae_raw)
+        new_keys       = _find_new_keys(vae_state.params, ckpt_vae_raw)
+        if new_keys:
+            print(f"  Partial warm-start: {len(new_keys)} new decoder key(s) init'd fresh → "
+                  + ", ".join(sorted(new_keys)[:6]) + ("…" if len(new_keys) > 6 else ""))
+
+        # Optimizer state: restore if structure matches, otherwise start fresh.
+        try:
+            restored_vae_opt = from_state_dict(vae_state.opt_state, ckpt['vae_opt_state'])
+            vae_state = vae_state.replace(params=merged_params,
+                                          opt_state=restored_vae_opt,
+                                          step=int(ckpt['global_step']))
+            print("  VAE optimizer state: restored from checkpoint")
+        except (ValueError, KeyError) as _exc:
+            print(f"  VAE optimizer state mismatch ({_exc.__class__.__name__}: "
+                  f"{str(_exc)[:120]})")
+            print("  → Starting VAE optimizer fresh (params partially restored).")
+            vae_state = vae_state.replace(params=merged_params)
+
+        if use_factor_disc and disc_state is not None and 'disc_params' in ckpt:
             restored_disc_params = jax.tree_util.tree_map(jnp.array, ckpt['disc_params'])
-            restored_disc_opt    = from_state_dict(disc_state.opt_state, ckpt['disc_opt_state'])
-            disc_state = disc_state.replace(params=restored_disc_params,
-                                            opt_state=restored_disc_opt)
-        if 'patch_disc_params' in ckpt:
+            try:
+                restored_disc_opt = from_state_dict(disc_state.opt_state, ckpt['disc_opt_state'])
+                disc_state = disc_state.replace(params=restored_disc_params,
+                                                opt_state=restored_disc_opt)
+            except (ValueError, KeyError):
+                disc_state = disc_state.replace(params=restored_disc_params)
+        if use_patch_disc and patch_disc_state is not None and 'patch_disc_params' in ckpt:
             restored_pd_params = jax.tree_util.tree_map(jnp.array, ckpt['patch_disc_params'])
-            restored_pd_opt    = from_state_dict(patch_disc_state.opt_state,
-                                                  ckpt['patch_disc_opt_state'])
-            patch_disc_state = patch_disc_state.replace(params=restored_pd_params,
-                                                         opt_state=restored_pd_opt)
+            try:
+                restored_pd_opt = from_state_dict(patch_disc_state.opt_state,
+                                                   ckpt['patch_disc_opt_state'])
+                patch_disc_state = patch_disc_state.replace(params=restored_pd_params,
+                                                             opt_state=restored_pd_opt)
+            except (ValueError, KeyError):
+                patch_disc_state = patch_disc_state.replace(params=restored_pd_params)
         if vae_batch_stats and 'vae_batch_stats' in ckpt:
             vae_batch_stats = jax.tree_util.tree_map(jnp.array, ckpt['vae_batch_stats'])
         if 'ema_params' in ckpt:
-            ema_params = jax.tree_util.tree_map(jnp.array, ckpt['ema_params'])
+            ema_params = _merge_params(ema_params, jax.tree_util.tree_map(jnp.array,
+                                                                           ckpt['ema_params']))
         rng         = jnp.array(ckpt['rng'])
         start_epoch = int(ckpt['epoch']) + 1
         global_step = int(ckpt['global_step'])
+        # phase_start_global_step anchors gan_start_step to this run, not the entire
+        # curriculum history — prevents D5 from bypassing GAN warm-up on resume.
+        phase_start_global_step = global_step
         print(f"Resumed from epoch {int(ckpt['epoch'])}, step {global_step}")
+
+        if start_epoch > args.epochs:
+            raise ValueError(
+                f"Resume checkpoint is already at epoch {start_epoch - 1}, "
+                f"but --epochs={args.epochs}. --epochs is interpreted as the "
+                "final epoch number after resume, so this run would execute "
+                "zero training epochs."
+            )
 
     # ── Loss config ───────────────────────────────────────────────────────────
     loss_cfg = SepVAELossConfig(
@@ -623,19 +1047,26 @@ def main():
         weight_perceptual=args.weight_perceptual,
         weight_gan=args.weight_gan,
         weight_tv=args.weight_tv,
+        weight_masked_rec=args.weight_masked_rec,
         weight_kl_common=args.weight_kl_common,
         weight_kl_disease=args.weight_kl_disease,
         weight_mi_factor=args.weight_mi_factor,
         weight_bbox_attn=args.weight_bbox_attn,
+        weight_cardio_supcon=args.weight_cardio_supcon,
+        supcon_temperature=args.supcon_temperature,
         sigma_inactive=args.sigma_inactive,
+        kl_free_bits=args.kl_free_bits,
     )
     print(f"\nLoss weights: rec={loss_cfg.weight_rec}  "
           f"percep={loss_cfg.weight_perceptual}  "
           f"gan={loss_cfg.weight_gan}  "
           f"tv={loss_cfg.weight_tv}  "
+          f"masked_rec={loss_cfg.weight_masked_rec}  "
           f"kl_c={loss_cfg.weight_kl_common}  "
           f"kl_d={loss_cfg.weight_kl_disease}  "
+          f"kl_free_bits={loss_cfg.kl_free_bits}  "
           f"mi_factor={loss_cfg.weight_mi_factor}  "
+          f"supcon={loss_cfg.weight_cardio_supcon}  "
           f"bbox={loss_cfg.weight_bbox_attn}")
 
     # ── JIT'd steps ───────────────────────────────────────────────────────────
@@ -650,13 +1081,21 @@ def main():
         )
 
     @jax.jit
-    def get_pooled_latents(vae_params_arg, x):
+    def get_pooled_latents(vae_params_arg, x, bbox_full, has_bbox):
         """Encoder-only forward pass → spatially pooled z_c and z_ca."""
         variables = {'params': vae_params_arg}
         if _batch_stats_arg is not None:
             variables['batch_stats'] = _batch_stats_arg
-        # bbox=None → BboxCrossAttnHead uses fallback learned query (safe for warm-up)
-        ld = sepvae.apply(variables, x, method=sepvae.encode)
+        if IS_V2 and args.use_bbox_cross_attn:
+            ld = sepvae.apply(
+                variables,
+                x,
+                bbox=bbox_full,
+                has_bbox=has_bbox,
+                method=sepvae.encode,
+            )
+        else:
+            ld = sepvae.apply(variables, x, method=sepvae.encode)
         z_c  = jnp.mean(ld['common'][0],       axis=(1, 2))
         z_ca = jnp.mean(ld['cardiomegaly'][0], axis=(1, 2))
         return z_c, z_ca
@@ -671,10 +1110,14 @@ def main():
         )
         return disc_state_arg.apply_gradients(grads=grads), d_loss, d_acc
 
+    _r1_weight = args.disc_r1_penalty  # captured in closure; avoids Python overhead in jit
+
     @jax.jit
     def patch_disc_step(patch_disc_state_arg, x_real, x_rec_stale):
         """Update PatchGAN discriminator: real vs stale reconstruction.
-        x_rec is stop_gradient'd (stale) so gradients flow only through the discriminator.
+        x_rec is stop_gradient'd so gradients flow only through the discriminator.
+        Includes optional R1 gradient penalty on real samples to prevent discriminator
+        from overfitting and dominating the generator (Bug 3 fix).
         Returns updated state, disc loss, and patch disc accuracy."""
         x_real_sg = jax.lax.stop_gradient(x_real)
         x_fake_sg = jax.lax.stop_gradient(x_rec_stale)
@@ -683,6 +1126,15 @@ def main():
             real_logits = patch_discriminator.apply({'params': pd_params}, x_real_sg, train=True)
             fake_logits = patch_discriminator.apply({'params': pd_params}, x_fake_sg, train=True)
             pd_loss = hinge_d_loss(real_logits, fake_logits)
+            # R1 gradient penalty: penalise large discriminator gradients on real samples.
+            # This prevents the discriminator from growing arbitrarily strong relative to
+            # the generator.  E[||∇_x D(x_real)||^2] — standard γ=10.
+            if _r1_weight > 0.0:
+                def _disc_mean(x):
+                    return jnp.mean(patch_discriminator.apply({'params': pd_params}, x, train=True))
+                r1_grads = jax.grad(_disc_mean)(x_real_sg)                # (N,H,W,1)
+                r1_penalty = 0.5 * jnp.mean(jnp.sum(jnp.square(r1_grads), axis=(1, 2, 3)))
+                pd_loss = pd_loss + _r1_weight * r1_penalty
             # Accuracy: real predicted as real (>0) and fake predicted as fake (<=0)
             pd_acc = (
                 jnp.mean((real_logits > 0).astype(jnp.float32)) * 0.5 +
@@ -700,8 +1152,9 @@ def main():
                  key, kl_anneal):
         """Update VAE with all losses including FactorVAE MI and PatchGAN (both discs frozen).
         bbox_full and has_bbox are pre-assembled in the batch dict by the train loop."""
-        bbox_arg     = batch.get('bbox_full')     # (2B, 4) or None
-        has_bbox_arg = batch.get('has_bbox')      # (2B,)  or None
+        bbox_arg           = batch.get('bbox_full')       # (2B, 4) or None
+        has_bbox_arg       = batch.get('has_bbox')        # (2B,)  or None
+        has_bbox_query_arg = batch.get('has_bbox_query')  # (2B,)  or None
 
         def loss_fn(params):
             total_loss, logs, z_c, z_ca, x_rec = sepvae_loss(
@@ -714,6 +1167,7 @@ def main():
                 backbone_variables=_backbone_vars,
                 bbox=bbox_arg,
                 has_bbox=has_bbox_arg,
+                has_bbox_query=has_bbox_query_arg,
                 patch_disc_params=patch_disc_params_frozen,
                 patch_discriminator=patch_discriminator,
             )
@@ -729,21 +1183,21 @@ def main():
         variables = {'params': vae_params_arg}
         if _batch_stats_arg is not None:
             variables['batch_stats'] = _batch_stats_arg
-        x_rec, latents_dict, _, _ = sepvae.apply(
-            variables, x, labels, key=key, train=False,
-            bbox=bbox_full, has_bbox=has_bbox,
-        )
+        if IS_V2 and args.use_bbox_cross_attn:
+            x_rec, latents_dict, _, _ = sepvae.apply(
+                variables, x, labels, key=key, train=False,
+                bbox=bbox_full, has_bbox=has_bbox,
+            )
+        else:
+            x_rec, latents_dict, _, _ = sepvae.apply(
+                variables, x, labels, key=key, train=False,
+            )
         return x_rec, latents_dict['attn_maps']
 
     # ── Training loop ─────────────────────────────────────────────────────────
     print("\n" + "=" * 60)
     print("TRAINING" + (f" (resuming from epoch {start_epoch})" if start_epoch > 1 else ""))
     print("=" * 60)
-
-    # Warm up stale latents and stale x_rec before the loop starts.
-    _init_x    = jnp.zeros((args.batch_size * 2, args.img_size, args.img_size, 1))
-    z_c_stale, z_ca_stale = get_pooled_latents(vae_state.params, _init_x)
-    x_rec_stale = jnp.zeros((args.batch_size * 2, args.img_size, args.img_size, 1))
 
     for epoch in range(start_epoch, args.epochs + 1):
         kl_anneal = jnp.float32(
@@ -754,6 +1208,7 @@ def main():
         print(f"\nEpoch {epoch}/{args.epochs}{anneal_str}")
 
         epoch_logs = []
+        last_batch = None
 
         for batch_torch in loader:
             batch = {
@@ -765,7 +1220,6 @@ def main():
 
             # ── Assemble (2B, 4) bbox tensor for V2 cross-attention ──────────
             # Normal images get a zero bbox (will have has_bbox=0 → fallback query)
-            B_step     = batch['x_norm'].shape[0]
             bbox_cardio = batch['bbox_disease1']                          # (B, 4)
             bbox_full   = jnp.concatenate(
                 [jnp.zeros_like(bbox_cardio), bbox_cardio], axis=0
@@ -773,31 +1227,59 @@ def main():
             has_bbox    = (
                 (bbox_full[:, 2] - bbox_full[:, 0]) > 1e-4
             ).astype(jnp.float32)                                          # (2B,)
+            has_bbox_query = has_bbox
+            if args.use_bbox_cross_attn and args.bbox_dropout_prob > 0.0:
+                rng, key_bbox_dropout = jax.random.split(rng)
+                keep_mask = (
+                    1.0 - jax.random.bernoulli(
+                        key_bbox_dropout,
+                        p=args.bbox_dropout_prob,
+                        shape=has_bbox.shape,
+                    ).astype(jnp.float32)
+                )
+                has_bbox_query = has_bbox * keep_mask
             batch['bbox_full'] = bbox_full
-            batch['has_bbox']  = has_bbox
+            batch['has_bbox'] = has_bbox
+            batch['has_bbox_query'] = has_bbox_query
 
-            rng, key_disc, key_patch_disc, key_vae = jax.random.split(rng, 4)
+            rng, key_disc, key_vae = jax.random.split(rng, 3)
+            x_full = jnp.concatenate([batch['x_norm'], batch['x_disease1']], axis=0)
+            x_real_01 = (x_full + 1.0) / 2.0
 
-            # Step 1: FactorVAE discriminator update (stale latents)
-            disc_state, disc_loss, disc_acc = disc_step(
-                disc_state, z_c_stale, z_ca_stale, key_disc
+            if use_factor_disc and disc_state is not None:
+                z_c_curr, z_ca_curr = get_pooled_latents(
+                    vae_state.params, x_full, batch['bbox_full'], batch['has_bbox_query']
+                )
+                disc_state, disc_loss, disc_acc = disc_step(
+                    disc_state, jax.lax.stop_gradient(z_c_curr), jax.lax.stop_gradient(z_ca_curr), key_disc
+                )
+                disc_params_frozen = jax.lax.stop_gradient(disc_state.params)
+            else:
+                disc_loss = jnp.float32(0.0)
+                disc_acc = jnp.float32(0.0)
+                disc_params_frozen = None
+
+            phase_local_step = global_step - phase_start_global_step
+            gan_active = use_patch_disc and patch_disc_state is not None and phase_local_step >= args.gan_start_step
+            patch_disc_params_frozen = (
+                jax.lax.stop_gradient(patch_disc_state.params) if gan_active else None
             )
 
-            # Step 2: PatchGAN discriminator update (stale x_rec)
-            # x_real is the current batch concatenated (Normal + Cardio), rescaled to [0,1]
-            x_real_01 = (jnp.concatenate([batch['x_norm'], batch['x_disease1']], axis=0)
-                         + 1.0) / 2.0
-            patch_disc_state, patch_disc_loss, patch_disc_acc = patch_disc_step(
-                patch_disc_state, x_real_01, x_rec_stale
-            )
-
-            # Step 3: VAE update (both discs frozen); returns fresh latents and x_rec
-            disc_params_frozen       = jax.lax.stop_gradient(disc_state.params)
-            patch_disc_params_frozen = jax.lax.stop_gradient(patch_disc_state.params)
-            vae_state, logs, z_c_stale, z_ca_stale, x_rec_stale = vae_step(
+            # Step 2: VAE update on the same batch.
+            vae_state, logs, _, _, x_rec = vae_step(
                 vae_state, batch, disc_params_frozen, patch_disc_params_frozen,
                 key_vae, kl_anneal
             )
+
+            # Step 3: PatchGAN discriminator update on the current reconstruction.
+            # D6 FIX: full batch (Normal + Cardiomegaly) — both classes need sharpening.
+            if gan_active:
+                patch_disc_state, patch_disc_loss, patch_disc_acc = patch_disc_step(
+                    patch_disc_state, x_real_01, x_rec
+                )
+            else:
+                patch_disc_loss = jnp.float32(0.0)
+                patch_disc_acc = jnp.float32(0.0)
 
             if args.ema_decay > 0:
                 ema_params = update_ema(ema_params, vae_state.params, args.ema_decay)
@@ -809,6 +1291,7 @@ def main():
                 'metrics/patch_disc_acc': patch_disc_acc,
             }
             epoch_logs.append(logs)
+            last_batch = batch
 
             if global_step % args.log_every == 0:
                 print(f"  Step {global_step}: "
@@ -816,11 +1299,15 @@ def main():
                       f"rec={float(logs['loss/reconstruction']):.4f}  "
                       f"kl={float(logs['loss/kl_total']):.4f}  "
                       f"mi={float(logs['loss/mi_factor']):.4f}  "
+                      f"supcon={float(logs['loss/cardio_supcon']):.4f}  "
                       f"disc={float(logs['loss/disc']):.4f}  "
                       f"D_acc={float(logs['metrics/disc_acc']):.2f}  "
                       f"bbox={float(logs['loss/bbox_attn']):.4f}  "
+                      f"ratio={float(logs['metrics/z_cardio_norm_ratio']):.2f}  "
                       f"gan_g={float(logs['loss/gan_g']):.4f}  "
                       f"tv={float(logs['loss/tv']):.4f}  "
+                      f"msk={float(logs['loss/masked_rec']):.4f}  "
+                      f"c_ratio={float(logs['metrics/z_common_norm_ratio']):.2f}  "
                       f"PD_acc={float(logs['metrics/patch_disc_acc']):.2f}")
                 if args.wandb and _WANDB:
                     wandb.log({k: float(v) for k, v in logs.items()} | {'epoch': epoch},
@@ -834,14 +1321,19 @@ def main():
               f"rec={avg['loss/reconstruction']:.4f}  "
               f"kl={avg['loss/kl_total']:.4f}  "
               f"mi={avg['loss/mi_factor']:.4f}  "
+              f"supcon={avg['loss/cardio_supcon']:.4f}  "
               f"disc={avg['loss/disc']:.4f}  "
               f"D_acc={avg['metrics/disc_acc']:.2f}  "
               f"bbox={avg['loss/bbox_attn']:.4f}  "
+              f"ratio={avg['metrics/z_cardio_norm_ratio']:.2f}  "
               f"gan_g={avg['loss/gan_g']:.4f}  "
               f"tv={avg['loss/tv']:.4f}  "
+              f"msk={avg['loss/masked_rec']:.4f}  "
+              f"c_ratio={avg['metrics/z_common_norm_ratio']:.2f}  "
               f"PD_acc={avg['metrics/patch_disc_acc']:.2f}")
 
         # Checkpoint
+        ckpt_path = None
         if epoch % args.save_every == 0:
             ckpt_path = ckpt_dir / f"checkpoint_epoch{epoch:04d}.pkl"
             ckpt_data = {
@@ -850,27 +1342,29 @@ def main():
                 'ema_params':           ema_params,
                 'vae_batch_stats':      vae_batch_stats,
                 'vae_opt_state':        vae_state.opt_state,
-                'disc_params':          disc_state.params,
-                'disc_opt_state':       disc_state.opt_state,
-                'patch_disc_params':    patch_disc_state.params,
-                'patch_disc_opt_state': patch_disc_state.opt_state,
                 'rng': rng, 'args': vars(args),
             }
+            if use_factor_disc and disc_state is not None:
+                ckpt_data['disc_params'] = disc_state.params
+                ckpt_data['disc_opt_state'] = disc_state.opt_state
+            if use_patch_disc and patch_disc_state is not None:
+                ckpt_data['patch_disc_params'] = patch_disc_state.params
+                ckpt_data['patch_disc_opt_state'] = patch_disc_state.opt_state
             with open(ckpt_path, 'wb') as f:
                 f.write(to_bytes(ckpt_data))
             print(f"  Saved: {ckpt_path}")
 
         # Visualisations
-        if args.sample_every > 0 and epoch % args.sample_every == 0:
+        if last_batch is not None and args.sample_every > 0 and epoch % args.sample_every == 0:
             rng, vis_key = jax.random.split(rng)
             vis_params = ema_params if args.ema_decay > 0 else vae_state.params
 
-            x_full   = jnp.concatenate([batch['x_norm'], batch['x_disease1']], axis=0)
-            labels_v = batch['disease_labels']
+            x_full   = jnp.concatenate([last_batch['x_norm'], last_batch['x_disease1']], axis=0)
+            labels_v = last_batch['disease_labels']
 
             x_rec, attn_maps = reconstruct_and_encode(
                 vis_params, x_full, labels_v, vis_key,
-                batch['bbox_full'], batch['has_bbox'],
+                last_batch['bbox_full'], last_batch['has_bbox'],
             )
 
             grid_path = samples_dir / f"recon_epoch{epoch:04d}.png"
@@ -884,7 +1378,7 @@ def main():
                 {k: np.array(v) for k, v in attn_maps.items()},
                 np.array(labels_v),
                 n_per_class=args.n_samples_per_class,
-                bboxes_cardio=np.array(batch['bbox_disease1']),
+                bboxes_cardio=np.array(last_batch['bbox_disease1']),
             ).save(str(attn_path))
             print(f"  Saved attention maps: {attn_path}")
 
@@ -894,44 +1388,117 @@ def main():
                     "diagnostics/attn_maps": wandb.Image(str(attn_path)),
                 }, step=global_step)
 
+            # ── Scenario overlay ──────────────────────────────────────────────
+            if _DIAG and _make_scenario_overlay is not None:
+                try:
+                    scenario_img  = _make_scenario_overlay(metrics_history_path, epoch)
+                    scenario_path = diag_dir / f"loss_scenarios_epoch{epoch:04d}.png"
+                    scenario_img.save(str(scenario_path))
+                    if args.wandb and _WANDB:
+                        wandb.log({"diagnostics/loss_scenarios": wandb.Image(str(scenario_path))},
+                                  step=global_step)
+                    print(f"  Saved scenario overlay: {scenario_path}")
+                except Exception as _e:
+                    print(f"  [warn] scenario overlay failed: {_e}")
+
         # Manifold
+        manifold_metrics = {}
+        manifold_path = None
         if args.manifold_every > 0 and epoch % args.manifold_every == 0:
             manifold_path   = manifold_dir / f"manifold_epoch{epoch:04d}.png"
             manifold_params = ema_params if args.ema_decay > 0 else vae_state.params
-            metrics = save_latent_manifold_plot(
-                sepvae, manifold_params, vae_batch_stats, loader,
-                manifold_path, max_samples=args.manifold_max_samples,
+            manifold_metrics = save_latent_manifold_plot(
+                sepvae, manifold_params, vae_batch_stats, eval_loader,
+                manifold_path, max_samples=min(args.manifold_max_samples, args.eval_subset_size),
                 method=args.manifold_method,
                 use_bbox_cross_attn=args.use_bbox_cross_attn,
+                bbox_mode=args.manifold_bbox_mode,
             )
-            if metrics:
+            if manifold_metrics:
                 print("  Manifold: " + ", ".join(
-                    f"{k}={v:.3f}" for k, v in metrics.items() if np.isfinite(v)
+                    f"{k}={v:.3f}" for k, v in manifold_metrics.items() if np.isfinite(v)
                 ))
             if args.wandb and _WANDB:
                 payload = {"samples/latent_manifold": wandb.Image(str(manifold_path))}
                 payload.update({f"manifold/{k}": float(v)
-                                 for k, v in metrics.items() if np.isfinite(v)})
+                                 for k, v in manifold_metrics.items() if np.isfinite(v)})
                 wandb.log(payload, step=global_step)
+
+            # ── KL heatmap (2-class) ─────────────────────────────────────────
+            if last_batch is not None:
+                try:
+                    kl_img  = _make_kl_heatmap(
+                        sepvae, manifold_params,
+                        last_batch['x_norm'], last_batch['x_disease1'],
+                    )
+                    kl_path = diag_dir / f"kl_heatmap_epoch{epoch:04d}.png"
+                    kl_img.save(str(kl_path))
+                    if args.wandb and _WANDB:
+                        wandb.log({"diagnostics/kl_heatmap": wandb.Image(str(kl_path))},
+                                  step=global_step)
+                    print(f"  Saved KL heatmap: {kl_path}")
+                except Exception as _e:
+                    print(f"  [warn] KL heatmap failed: {_e}")
+
+            # ── Counterfactual acid test ──────────────────────────────────────
+            if _DIAG and _run_counterfactual_eval is not None:
+                try:
+                    _run_counterfactual_eval(
+                        sepvae, manifold_params, vae_batch_stats,
+                        eval_loader,
+                        output_dir=diag_dir,
+                        epoch=epoch,
+                        global_step=global_step,
+                        n_samples=min(8, args.eval_subset_size),
+                        use_wandb=(args.wandb and _WANDB),
+                    )
+                except Exception as _e:
+                    print(f"  [warn] counterfactual eval failed: {_e}")
+
+            # ── 8-panel research claim scaffolding ───────────────────────────
+            if _DIAG and _run_scaffolding is not None:
+                try:
+                    _run_scaffolding(
+                        sepvae, manifold_params, vae_batch_stats,
+                        eval_loader,
+                        epoch=epoch,
+                        global_step=global_step,
+                        output_dir=diag_dir,
+                        use_wandb=(args.wandb and _WANDB),
+                        use_bbox_cross_attn=args.use_bbox_cross_attn,
+                    )
+                except Exception as _e:
+                    print(f"  [warn] scaffolding failed: {_e}")
+
+        epoch_record = {'epoch': epoch, 'global_step': global_step}
+        epoch_record.update({k: float(v) for k, v in avg.items()})
+        epoch_record.update({k: float(v) for k, v in manifold_metrics.items() if np.isfinite(v)})
+        epoch_record['checkpoint_path'] = str(ckpt_path) if ckpt_path is not None else None
+        epoch_record['manifold_path'] = str(manifold_path) if manifold_path is not None else None
+        with open(metrics_history_path, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(epoch_record) + "\n")
 
     print("\n" + "=" * 60)
     print("TRAINING COMPLETE")
     print("=" * 60)
 
     final_path = ckpt_dir / "checkpoint_final.pkl"
+    final_data = {
+        'epoch': args.epochs, 'global_step': global_step,
+        'vae_params':           vae_state.params,
+        'ema_params':           ema_params,
+        'vae_batch_stats':      vae_batch_stats,
+        'vae_opt_state':        vae_state.opt_state,
+        'rng': rng, 'args': vars(args),
+    }
+    if use_factor_disc and disc_state is not None:
+        final_data['disc_params'] = disc_state.params
+        final_data['disc_opt_state'] = disc_state.opt_state
+    if use_patch_disc and patch_disc_state is not None:
+        final_data['patch_disc_params'] = patch_disc_state.params
+        final_data['patch_disc_opt_state'] = patch_disc_state.opt_state
     with open(final_path, 'wb') as f:
-        f.write(to_bytes({
-            'epoch': args.epochs, 'global_step': global_step,
-            'vae_params':           vae_state.params,
-            'ema_params':           ema_params,
-            'vae_batch_stats':      vae_batch_stats,
-            'vae_opt_state':        vae_state.opt_state,
-            'disc_params':          disc_state.params,
-            'disc_opt_state':       disc_state.opt_state,
-            'patch_disc_params':    patch_disc_state.params,
-            'patch_disc_opt_state': patch_disc_state.opt_state,
-            'rng': rng, 'args': vars(args),
-        }))
+        f.write(to_bytes(final_data))
     print(f"Final checkpoint: {final_path}")
 
     if args.wandb and _WANDB:

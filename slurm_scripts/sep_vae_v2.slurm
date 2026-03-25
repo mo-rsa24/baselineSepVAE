@@ -15,8 +15,9 @@
 #   export BATCH_SIZE=16; PHASE=d1 sbatch slurm_scripts/sep_vae_v2.slurm
 
 #SBATCH --job-name=sepvae-v2
-#SBATCH --partition=biggpu
-#SBATCH --time=48:00:00
+#SBATCH --exclude=mscluster44,mscluster65,mscluster76,mscluster59,mscluster48,mscluster82,mscluster75,mscluster72
+#SBATCH --partition=bigbatch
+#SBATCH --time=72:00:00
 #SBATCH --ntasks=1
 #SBATCH --output=logs/sepvae-v2-%j.out
 #SBATCH --error=logs/sepvae-v2-%j.err
@@ -34,8 +35,8 @@ die()   { printf "${RED}!! %s${RST}\n" "$*" >&2; exit 1; }
 PHASE="${PHASE:-d0}"
 
 case "$PHASE" in
-  d0|d1|d2|d4) ;;
-  *) die "Unknown PHASE='${PHASE}'. Valid: d0 d1 d2 d4" ;;
+  d0|d1|d2|d4|d5) ;;
+  *) die "Unknown PHASE='${PHASE}'. Valid: d0 d1 d2 d4 d5" ;;
 esac
 
 # ── Shared paths ──────────────────────────────────────────────────────────────
@@ -73,44 +74,77 @@ WANDB_ENTITY="${WANDB_ENTITY:-}"
 # ── Per-phase config ──────────────────────────────────────────────────────────
 case "$PHASE" in
   d0)
+    # Smoke test — verify pipeline end-to-end, no orthogonality pressure
     EXP_NAME="${EXP_NAME:-d0_smoke_v2}"
-    EPOCHS="${EPOCHS:-3}"
+    EPOCHS="${EPOCHS:-5}"
     KL_WARMUP_EPOCHS=0
     WEIGHT_REC=1.0; WEIGHT_KL_COMMON=1e-4; WEIGHT_KL_DISEASE=5e-5
     WEIGHT_MI_FACTOR=0.0; WEIGHT_BBOX_ATTN=0.0; WEIGHT_PERCEPTUAL=0.0
+    BATCH_SIZE="${BATCH_SIZE:-16}"
     USE_BBOX_CROSS_ATTN=0
     RESUME=""
     SAMPLE_EVERY=1; MANIFOLD_EVERY=-1
     ;;
   d1)
+    # Reconstruction + KL warm-up + bbox cross-attn alignment; no MI yet.
+    # 30 epochs gives the encoder time to learn CXR features from scratch and the
+    # BboxCrossAttnHead to reliably localise cardiomegaly before the MI disc is added.
     EXP_NAME="${EXP_NAME:-d1_recon_bbox_xattn}"
-    EPOCHS="${EPOCHS:-20}"
+    EPOCHS="${EPOCHS:-30}"
     KL_WARMUP_EPOCHS="${KL_WARMUP_EPOCHS:-5}"
     WEIGHT_REC=1.0; WEIGHT_KL_COMMON=1e-4; WEIGHT_KL_DISEASE=5e-5
     WEIGHT_MI_FACTOR=0.0; WEIGHT_BBOX_ATTN=0.0; WEIGHT_PERCEPTUAL=0.0
+    BATCH_SIZE="${BATCH_SIZE:-16}"
     USE_BBOX_CROSS_ATTN=1
     RESUME="${RESUME:-}"
     ;;
   d2)
+    # Add FactorVAE MI pressure.  35 epochs lets the discriminator stabilise and
+    # orthogonal separation emerge before we add the perceptual loss in D4.
     EXP_NAME="${EXP_NAME:-d2_mi_disc}"
-    EPOCHS="${EPOCHS:-25}"
+    EPOCHS="${EPOCHS:-35}"
     KL_WARMUP_EPOCHS=0
     WEIGHT_REC=1.0; WEIGHT_KL_COMMON=1e-4; WEIGHT_KL_DISEASE=1e-4
     WEIGHT_MI_FACTOR="${WEIGHT_MI_FACTOR:-1.0}"
     WEIGHT_BBOX_ATTN=0.0; WEIGHT_PERCEPTUAL=0.0
+    BATCH_SIZE="${BATCH_SIZE:-16}"
     USE_BBOX_CROSS_ATTN=1
-    RESUME="${RESUME:-${OUTPUT_ROOT}/d1_recon_bbox_xattn/checkpoint_final.pkl}"
+    RESUME="${RESUME:-}"   # set by run_curriculum.sh; no hardcoded stale path
     ;;
   d4)
+    # CheSS perceptual loss refines reconstruction sharpness.
+    # 20 epochs is enough since the encoder/decoder are already well-trained.
+    # batch=12: perceptual backbone adds ~1 GB vs D1/D2.
     EXP_NAME="${EXP_NAME:-d4_perceptual}"
-    EPOCHS="${EPOCHS:-15}"
+    EPOCHS="${EPOCHS:-20}"
     KL_WARMUP_EPOCHS=0
     WEIGHT_REC=1.0; WEIGHT_KL_COMMON=1e-4; WEIGHT_KL_DISEASE=1e-4
     WEIGHT_MI_FACTOR="${WEIGHT_MI_FACTOR:-1.0}"
     WEIGHT_BBOX_ATTN=0.0
     WEIGHT_PERCEPTUAL="${WEIGHT_PERCEPTUAL:-0.05}"
+    BATCH_SIZE="${BATCH_SIZE:-12}"
     USE_BBOX_CROSS_ATTN=1
-    RESUME="${RESUME:-${OUTPUT_ROOT}/d2_mi_disc/checkpoint_final.pkl}"
+    RESUME="${RESUME:-}"   # set by run_curriculum.sh
+    ;;
+  d5)
+    EXP_NAME="${EXP_NAME:-d5_recon}"
+    EPOCHS="${EPOCHS:-60}"
+    KL_WARMUP_EPOCHS=0
+    WEIGHT_REC="${WEIGHT_REC:-2.0}"
+    WEIGHT_KL_COMMON=1e-4; WEIGHT_KL_DISEASE=1e-4
+    WEIGHT_MI_FACTOR="${WEIGHT_MI_FACTOR:-1.0}"
+    WEIGHT_BBOX_ATTN="${WEIGHT_BBOX_ATTN:-0.1}"
+    WEIGHT_PERCEPTUAL="${WEIGHT_PERCEPTUAL:-0.05}"
+    WEIGHT_GAN="${WEIGHT_GAN:-0.5}"
+    WEIGHT_TV="${WEIGHT_TV:-1e-3}"
+    GAN_START_STEP="${GAN_START_STEP:-5000}"
+    LR_PATCH_DISC="${LR_PATCH_DISC:-1e-4}"
+    # 24 GB (RTX 3090): batch=12 keeps decoder 256×256×128 activations + perceptual
+    # backbone within ~20 GB. Use BATCH_SIZE=16 override only if first steps stay < 22 GB.
+    BATCH_SIZE="${BATCH_SIZE:-12}"
+    NUM_WORKERS="${NUM_WORKERS:-4}"
+    USE_BBOX_CROSS_ATTN=1
+    RESUME="${RESUME:-${OUTPUT_ROOT}/sepvae_full_ortho-20260315-220524/checkpoints/checkpoint_final.pkl}"
     ;;
 esac
 
@@ -118,8 +152,8 @@ esac
 [[ -d "$DATA_DIR"  ]] || die "DATA_DIR not found: $DATA_DIR"
 [[ -f "$CSV_PATH"  ]] || die "CSV not found: $CSV_PATH"
 [[ -z "$RESUME" || -f "$RESUME" ]] || die "Checkpoint not found: $RESUME"
-if [[ "$PHASE" == "d4" ]]; then
-  [[ -f "$CHESS_CHECKPOINT" ]] || die "CheSS weights not found: $CHESS_CHECKPOINT (needed for D4 perceptual loss)"
+if [[ "$PHASE" == "d4" || "$PHASE" == "d5" ]]; then
+  [[ -f "$CHESS_CHECKPOINT" ]] || die "CheSS weights not found: $CHESS_CHECKPOINT (needed for D4/D5 perceptual loss)"
 fi
 
 # ── Environment ───────────────────────────────────────────────────────────────
@@ -184,7 +218,18 @@ ARGS=(
   --weight_bbox_attn     "$WEIGHT_BBOX_ATTN"
   --weight_perceptual    "$WEIGHT_PERCEPTUAL"
   --sigma_inactive       "$SIGMA_INACTIVE"
+)
 
+if [[ "$PHASE" == "d5" ]]; then
+  ARGS+=(
+    --weight_gan       "${WEIGHT_GAN:-0.0}"
+    --weight_tv        "${WEIGHT_TV:-0.0}"
+    --gan_start_step   "${GAN_START_STEP:-5000}"
+    --lr_patch_disc    "${LR_PATCH_DISC:-1e-4}"
+  )
+fi
+
+ARGS+=(
   --output_root          "$OUTPUT_ROOT"
   --exp_name             "$EXP_NAME"
   --sample_every         "$SAMPLE_EVERY"
@@ -194,7 +239,7 @@ ARGS=(
 [[ "$USE_BBOX_CROSS_ATTN" == "1" ]] && ARGS+=( --use_bbox_cross_attn )
 [[ -n "$RESUME"           ]]        && ARGS+=( --resume "$RESUME" )
 
-if [[ "$PHASE" == "d4" ]]; then
+if [[ "$PHASE" == "d4" || "$PHASE" == "d5" ]]; then
   ARGS+=( --chess_checkpoint "$CHESS_CHECKPOINT" --perceptual_only )
 fi
 

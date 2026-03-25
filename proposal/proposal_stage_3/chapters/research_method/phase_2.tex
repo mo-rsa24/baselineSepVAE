@@ -1,0 +1,114 @@
+\section{Phase 2: Representation Of Co-morbid Disease Conditions Using Composable Diffusion Models}
+This phase evaluates the practical utility of logical composition in synthesizing co-morbid pathological presentations. 
+We aim to generate realistic chest X-rays containing multiple pathologies, such as cardiomegaly and pleural thickening, without utilizing joint co-morbid training data. \
+This approach addresses the scarcity of multi-disease presentations in standard datasets and the high cost of expert radiological review for co-morbid labels. 
+By training separate generative models for individual pathologies and composing them at inference time, we provide a scalable framework for data augmentation and robustness testing in low-resource settings where specific patterns, such as silico-tuberculosis, are absent.
+\paragraph{Pathologies As Disentangled Objects}
+We treat pathologies as disentangled "objects" and their visual features as "attributes" to formally model the spatial and functional relationships required for co-morbid representation. 
+By explicitly enforcing factorized representations, we satisfy the independence assumptions of logical composition, enabling the synthesis of patterns otherwise missing from the training distribution.
+
+\paragraph{Pathology Selection}
+Cardiomegaly and Pleural Thickening are the primary pathological concepts for this phase. These conditions are selected because they often occur in distinct anatomical regions (e.g the central heart and the lung periphery). 
+This \emph{spatial orthogonality} provides a practical baseline to evaluate the independence assumptions required for logical composition
+\subsection{Dataset Overview}
+The experimental evaluation utilizes the VinBigData Chest X-ray dataset, which comprises 15,000 posteroanterior radiographs annotated by professional radiologists for 14 distinct pathological findings. 
+As illustrated in Figure \ref{fig:class_dist}, the dataset exhibits a significant "long-tail" distribution where "No finding" accounts for 70.7\% of the total images. 
+This imbalance necessitates a balanced sampling strategy during the training of pathological experts to ensure the "Normal" baseline does not suppress disease-specific signals.
+\begin{figure}[ht]
+\centering
+\includegraphics[width=\textwidth]{chapters/research_method/media/xray/class_distribution.png}
+\caption{Class distribution across 15,000 unique chest X-rays. The dominance of "No finding" (70.7\%) motivates the use of balanced sampling across pathology classes.}
+\label{fig:class_dist}
+\end{figure}
+
+\paragraph{Co-morbidity Scarcity and Clinical Motivation}
+The joint occurrence of these pathologies is significantly underrepresented within the training distribution compared to their individual prevalence. 
+As indicated by the co-occurrence matrix in Figure \ref{fig:cooccurrence}, the individual counts (i.e representing instances where a single pathology is the dominant finding ) are high, with Cardiomegaly appearing in 2,300 images and Pleural Thickening in 1,981. 
+However, their joint representation in the expert annotations falls to 858 occurrences. This creates a nearly 2.7x discrepancy between the primary individual prevalence and the joint cases.
+
+This statistical gap creates a training bottleneck for standard monolithic models. 
+Because the model has over 2,300 examples to learn the visual features of an enlarged heart in isolation, but fewer than 900 where it must coexist with pleural thickening, the training process is naturally biased toward isolated disease features. 
+Consequently, the model may struggle to learn the specific textural and spatial interactions required for coherent co-morbid synthesis. 
+Our compositional approach addresses this by leveraging these high-frequency individual counts as independent priors. 
+By composing these experts at inference time, we can synthesize ecologically valid patterns, such as silico-tuberculosis, without requiring the massive joint-labeled datasets that are typically unavailable.
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.85\textwidth]{chapters/research_method/media/xray/cooccurrence_heatmap_single.png}
+\caption{VinBigData co-occurrence and scarcity heatmap. The bright diagonal reveals individual disease prevalence, while the dark off-diagonal cells highlight the low-resource co-morbidity problem.}
+\label{fig:cooccurrence}
+\end{figure}
+\paragraph{Visual Characteristics and Spatial Bounding}
+The VinBigData dataset provides bounding box annotations that identify the spatial coordinates of each pathological finding. 
+As shown in Figure \ref{fig:disease_samples}, these regions-of-interest define the specific anatomical zones associated with each disease: Cardiomegaly is localized to the central mediastinum, while Pleural Thickening is concentrated at the lung peripheries and costophrenic angles. 
+We use these bounding boxes to guide the model's training, ensuring it learns to recognize the specific visual patterns of a disease within its correct anatomical location. 
+Separating these disease-specific features from the general chest anatomy enables us to later combine them to create new images. 
+This approach is essential for Phase 2, as it allows us to spatially compose different pathologies into a single synthetic X-ray without their visual details overlapping or blurring together.
+
+Standardizing the raw radiographs is necessary to resolve intensity inversion issues caused by varying DICOM ``''Photometric Interpretations``'' (Monochrome1 vs. Monochrome2) across different clinical sites and scanner models. 
+This ensures bone and air intensities are represented consistently across the 15,000-image collection. 
+Global pixel-intensity normalization further mitigates contrast and brightness variance introduced by diverse acquisition hardware. 
+This preprocessing allows the model to learn the structural and textural features of the pathologies—such as the increased cardio-thoracic ratio or peripheral blunting—independently of specific scanner parameters.
+\begin{figure}[ht]
+\centering
+\includegraphics[width=\textwidth]{chapters/research_method/media/xray/disease_samples_bbox.png}
+\caption{Ground-truth samples illustrating the spatial distinctness of Cardiomegaly (central) and Pleural Thickening (peripheral).}
+\label{fig:disease_samples}
+\end{figure}
+\paragraph{Spatial Orthogonality}
+To justify the score-addition strategy at the modeling stage, we analyze the typical distribution of these pathologies within the chest. This approach is grounded in the assumption that the selected pathologies generally occupy distinct anatomical regions, as illustrated in Figures \ref{fig:density_maps} and \ref{fig:spatial_comparison}.
+
+The aggregate spatial density heatmaps in Figure \ref{fig:density_maps} indicate that while some degree of overlap is possible, these diseases maintain primary "hotspots" in different areas: Cardiomegaly is typically centered in the mediastinum, while Pleural Effusion is concentrated at the lung bases. Figure \ref{fig:spatial_comparison} exemplifies this through a specific clinical case where the cardiac (red) and pleural (blue) bounding regions remain physically separated.
+
+While these pathologies may occasionally intersect, they more often than not present as spatially independent visual signals. This anatomical separation provides the theoretical rationale for a stable composition; it suggests that combining two diseases into a single synthetic image is likely to preserve their unique textures and shapes rather than resulting in a blurred or unrealistic hybrid.
+\begin{figure}[H]
+\centering
+\begin{minipage}{0.48\textwidth}
+\centering
+\includegraphics[width=\linewidth]{chapters/research_method/media/xray/spatial_orthogonality.png}
+\caption{Aggregate annotation density for Cardiomegaly ($n=2,300$) and Pleural Thickening ($n=1,981$), showing non-overlapping hotspots centered in the mediastinum and lung bases respectively.}
+\label{fig:density_maps}
+\end{minipage}\hfill
+\begin{minipage}{0.48\textwidth}
+\centering
+\includegraphics[width=\linewidth]{chapters/research_method/media/xray/normal_vs_comorbid.png}
+\caption{Comparison between a normal lung and a co-morbid patient. The spatial separation of the cardiac (red) and pleural (blue) bounding regions confirms the anatomical orthogonality of the two conditions.}
+\label{fig:spatial_comparison}
+\end{minipage}
+\end{figure}
+
+% \subsection{Methodology Part A: Learning Disentangled Manifolds with SepVAE}
+% The representation learning phase utilizes a Separable Variational Autoencoder (SepVAE) to construct a structured latent space for pathological features.
+% This architecture employs a shared encoder backbone that branches into distinct "Y-Network" heads to isolate specific disease factors from the global chest anatomy.
+% We enforce disentanglement by assigning independent latent dimensions $z_i \in \mathbb{R}^d$ to each pathology $i$, ensuring that the visual features of cardiomegaly do not interfere with those of pleural thickening.
+% This structured manifold serves as the foundational latent space for the subsequent conditional diffusion process, facilitating the independence required for score-based composition.
+
+% % { paragraph job: Define the loss functions and training objectives
+% % 1: Define the primary ELBO objective
+% The training objective is centered on maximizing the Evidence Lower Bound (ELBO), which consists of a reconstruction term and a Kullback–Leibler (KL) divergence penalty:
+% \begin{equation}
+% \mathcal{L}{ELBO} = \mathbb{E}{q_{\phi}(z|x)}[\log p_{\theta}(x|z)] - \beta D_{KL}(q_{\phi}(z|x) || p(z))
+% \end{equation}
+% % 2: Introduce the Orthogonality/Disentanglement term
+% To ensure the Y-Network heads remain independent, we introduce an explicit orthogonality loss $\mathcal{L}_{ortho}$ that minimizes the covariance between the partitioned latent subspaces:
+% \begin{equation}
+% \mathcal{L}{ortho} = \sum{i \neq j} | \text{Cov}(z_i, z_j) |^2_F
+% \end{equation}
+% % 3: Include the spatial supervision (Bounding Boxes)
+% We further incorporate a supervised localization loss $\mathcal{L}_{box}$ that utilizes bounding box coordinates to anchor latent activations to their corresponding anatomical regions.
+% % 4: Define the total loss function
+% The total loss function is a weighted sum of these components, where $\lambda_1$ and $\lambda_2$ are hyperparameters controlling the trade-off between reconstruction fidelity and factor independence:
+% \begin{equation}
+% \mathcal{L}{total} = \mathcal{L}{ELBO} + \lambda_1 \mathcal{L}{ortho} + \lambda_2 \mathcal{L}{box}
+% \end{equation}
+% % }
+
+% % { paragraph job: Detail the evaluation of the latent space
+% % 1: How do we verify the separation?
+% We evaluate the quality of the disentangled manifold by training linear probes to predict the presence of specific pathologies from their assigned latent dimensions.
+% % 2: Interpret the Probe AUC
+% A high Area Under the Curve (AUC) for these probes confirms that the pathological information is successfully isolated and has not "leaked" into unrelated dimensions.
+% % 3: Quantify latent separation
+% We further quantify the separation by measuring the distance between clustered latent centroids for each disease state.
+% % 4: Define the success criteria
+% Successful representation learning is achieved when the SepVAE produces a factorized latent space where each pathological concept can be manipulated without affecting the global radiological context.
+% % }

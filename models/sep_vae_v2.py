@@ -259,6 +259,7 @@ class ResNet50Scratch(nn.Module):
             h = BottleneckBlockGN(filters=128, stride=(2 if i == 0 else 1),
                                   use_projection=(i == 0),
                                   name=f'layer2_b{i}')(h)
+        h_layer2 = h   # (B, 32, 32, 512) — captured for D7 skip at 32×32 decoder scale
 
         # Layer 3: 6 blocks, filters=256, out=1024, stride-2 at b0  →  (B, 16, 16, 1024)
         for i in range(6):
@@ -270,7 +271,7 @@ class ResNet50Scratch(nn.Module):
         # Captures long-range structure: cardiac silhouette vs surrounding lung fields
         h = SelfAttention2D(num_heads=self.attn_heads, name='bottleneck_attn')(h)
 
-        return h   # (B, 16, 16, 1024) — Layer4 handled by separate Layer4BranchGN modules
+        return h, h_layer2   # (B, 16, 16, 1024), (B, 32, 32, 512)
 
 
 # =============================================================================
@@ -366,6 +367,7 @@ class BboxCrossAttnHead(nn.Module):
     out_channels: int
     hidden_channels: int = 256
     query_dim: int = 256
+    bbox_query_mix: float = 0.7
 
     @nn.compact
     def __call__(
@@ -383,6 +385,15 @@ class BboxCrossAttnHead(nn.Module):
         # Learned fallback query — used for Normal images or when bbox is absent
         q_learned = self.param('fallback_query', nn.initializers.normal(0.02), (self.query_dim,))
         Q_learned  = jnp.tile(q_learned[None, :], (B, 1))[:, None, :]   # (B, 1, D)
+
+        # Stop gradient through key_proj for Normal images: Normal cases have no spatial
+        # supervision and find it easy to attend to low-signal borders to satisfy KL
+        # pressure (mu≈0). Without this, Normal back-propagates through the shared key_proj
+        # and trains it toward border-salient features, contaminating Cardiomegaly attention.
+        # has_bbox=1 for Cardiomegaly (full gradients), has_bbox=0 for Normal (stopped).
+        if has_bbox is not None:
+            w_k = has_bbox[:, None, None]   # (B, 1, 1) broadcast over HW and D
+            K = K * w_k + jax.lax.stop_gradient(K) * (1.0 - w_k)
 
         if bbox is not None and has_bbox is not None:
             # ── Gaussian spatial prior from bbox ──────────────────────────────
@@ -412,9 +423,16 @@ class BboxCrossAttnHead(nn.Module):
             # Bbox-weighted aggregate of K  →  cross-attention query
             Q_bbox = jnp.sum(K * gauss_norm, axis=1, keepdims=True)   # (B, 1, D)
 
-            # Blend: disease images use Q_bbox, Normal images use Q_learned
+            # Blend the bbox-guided and learned fallback queries for positives.
+            q_bbox_blend = (
+                self.bbox_query_mix * Q_bbox
+                + (1.0 - self.bbox_query_mix) * Q_learned
+            )
+
+            # Disease images use the blended query, Normal / dropped-bbox samples
+            # use the learned fallback query.
             w = has_bbox[:, None, None]                                 # (B, 1, 1)
-            Q = Q_bbox * w + Q_learned * (1.0 - w)                     # (B, 1, D)
+            Q = q_bbox_blend * w + Q_learned * (1.0 - w)               # (B, 1, D)
         else:
             Q = Q_learned   # (B, 1, D)
 
@@ -456,6 +474,7 @@ class SepVAEEncoderV2(nn.Module):
     query_dim:           int  = 256
     attn_heads:          int  = 4
     use_bbox_cross_attn: bool = False   # False = D0, True = D1+
+    bbox_query_mix:      float = 0.7
 
     def setup(self):
         # nn.remat wraps modules for gradient checkpointing — avoids the tracer
@@ -471,6 +490,7 @@ class SepVAEEncoderV2(nn.Module):
             self.head_disease = BboxCrossAttnHead(
                 out_channels=self.z_channels_disease,
                 query_dim=self.query_dim,
+                bbox_query_mix=self.bbox_query_mix,
                 name='head_disease',
             )
         else:
@@ -490,7 +510,7 @@ class SepVAEEncoderV2(nn.Module):
         B = x.shape[0]
 
         # Shared trunk (nn.remat on submodule handles gradient checkpointing)
-        h_shared = self.backbone(x)   # (B, 16, 16, 1024)
+        h_shared, h_layer2 = self.backbone(x)   # (B, 16, 16, 1024), (B, 32, 32, 512)
 
         # Learnable layer4 branches — stride=1 throughout, stay at 16×16
         h_bg = self.bg_branch(h_shared)   # (B, 16, 16, 2048)
@@ -507,12 +527,17 @@ class SepVAEEncoderV2(nn.Module):
         else:
             mu_d, logvar_d, attn_map = self.head_disease(h_tg)
 
-        # Keys match V1 exactly — sep_vae_losses.py requires no changes
+        # Keys match V1 exactly — sep_vae_losses.py requires no changes.
+        # 'skip_feats' is ignored by losses but consumed by SepVAEV2 decoder path.
         return {
             'common':       (mu_c,  logvar_c),
             'cardiomegaly': (mu_d,  logvar_d),
             'attn_maps': {
                 'cardiomegaly': attn_map,   # (B, H, W) — for bbox loss
+            },
+            'skip_feats': {
+                'layer3': h_shared,   # (B, 16, 16, 1024) — injected at decoder 16×16 scale
+                'layer2': h_layer2,   # (B, 32, 32,  512) — injected at decoder 32×32 scale
             },
         }
 
@@ -656,11 +681,26 @@ class SepVAEDecoderV2(nn.Module):
     se_reduction:   int           = 8
 
     @nn.compact
-    def __call__(self, z, train: bool = True):
+    def __call__(self, z, skip_feats=None, train: bool = True):
         h = nn.Conv(self.ch_mults[-1], (3, 3), padding='SAME', name='z_proj')(z)
 
         for i in reversed(range(len(self.ch_mults))):
             ch = self.ch_mults[i]
+
+            # D7 skip injection: fuse shared-trunk features at matching spatial scales.
+            # Concat + 1×1 conv (no bias) preserves skip signal while adapting channels.
+            # Injection before ResBlockSE lets those blocks process the fused features.
+            # Spatial scales: i=4 → 16×16 (layer3, 1024ch); i=3 → 32×32 (layer2, 512ch).
+            if skip_feats is not None:
+                if i == 4 and 'layer3' in skip_feats:
+                    h = nn.Conv(ch, (1, 1), use_bias=False, name='skip3_fuse')(
+                        jnp.concatenate([h, skip_feats['layer3']], axis=-1)
+                    )
+                elif i == 3 and 'layer2' in skip_feats:
+                    h = nn.Conv(ch, (1, 1), use_bias=False, name='skip2_fuse')(
+                        jnp.concatenate([h, skip_feats['layer2']], axis=-1)
+                    )
+
             for _ in range(self.num_res_blocks):
                 h = ResBlockSE(
                     ch=ch,
@@ -695,8 +735,11 @@ class SepVAEV2(nn.Module):
         use_bbox_cross_attn=True    →  D1+ (pass bbox and has_bbox in forward call)
 
     Decoder: SepVAEDecoderV2 — SE-gated ResBlocks, 16×16 → 256×256.
-        ch_mults = (64, 128, 256, 512, 512)
+        ch_mults = (128, 128, 256, 512, 512)
         4 SmoothUp calls: 16 → 32 → 64 → 128 → 256
+        decoder_res_blocks=2  →  default (D0–D1)
+        decoder_res_blocks=3  →  D2+ (extra depth at every scale; Flax auto-names
+                                  ResBlockSE_2 so D1 weights load cleanly for _0/_1)
 
     Loss functions: fully compatible with sep_vae_losses.py (same dict keys as V1).
     """
@@ -705,6 +748,8 @@ class SepVAEV2(nn.Module):
     query_dim:           int  = 256
     attn_heads:          int  = 4
     use_bbox_cross_attn: bool = False
+    bbox_query_mix:      float = 0.7
+    decoder_res_blocks:  int  = 2   # increase to 3 for D2+ without breaking D1 resume
 
     def setup(self):
         self.encoder = SepVAEEncoderV2(
@@ -713,11 +758,15 @@ class SepVAEV2(nn.Module):
             query_dim=self.query_dim,
             attn_heads=self.attn_heads,
             use_bbox_cross_attn=self.use_bbox_cross_attn,
+            bbox_query_mix=self.bbox_query_mix,
         )
-        # SE-gated decoder: 16×16 → 256×256, 4 SmoothUp calls
+        # SE-gated decoder: 16×16 → 256×256, 4 SmoothUp calls.
+        # num_res_blocks=3 adds ResBlockSE_2 at every scale; Flax names blocks by
+        # loop index so existing _0/_1 weights restore from checkpoint without
+        # shape conflicts — _2 is freshly initialised near-identity.
         self.decoder = SepVAEDecoderV2(
             ch_mults=(128, 128, 256, 512, 512),
-            num_res_blocks=2,
+            num_res_blocks=self.decoder_res_blocks,
             z_channels=self.z_channels_common + self.z_channels_disease,
             se_reduction=8,
         )
@@ -735,11 +784,12 @@ class SepVAEV2(nn.Module):
         latents_dict = self.encoder(
             x, train=train, bbox=bbox, has_bbox=has_bbox
         )
+        skip_feats = latents_dict.get('skip_feats', None)
         key_sample, _ = jax.random.split(key)
         z_concat, z_c_pooled, z_d_pooled = apply_head_nulling_v2(
             latents_dict, labels, key_sample, disease_label_id=1,
         )
-        x_rec = self.decoder(z_concat, train=train)
+        x_rec = self.decoder(z_concat, skip_feats=skip_feats, train=train)
         return x_rec, latents_dict, z_c_pooled, z_d_pooled
 
     def encode(self, x, bbox=None, has_bbox=None):

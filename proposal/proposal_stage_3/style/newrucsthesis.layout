@@ -1,0 +1,79 @@
+#% Do not delete the line below; configure depends on this
+#  \DeclareLaTeXClass{newrucsthesis}
+# Report textclass definition file. Taken from initial LyX source code
+# Author : Matthias Ettrich <ettrich@informatik.uni-tuebingen.de>
+# Transposed by Pascal André <andre@via.ecp.fr>
+# Heavily modifed and enhanced by serveral developers.
+
+Format 4
+Input stdclass.inc
+Input numreport.inc
+
+Style Bibliography
+	TopSep                4
+	LabelString           "Bibliography"
+	LabelFont
+	  Series              Bold
+	  Size                Huge
+	EndFont
+End
+
+
+Style PartialDegree
+  LatexType             Command
+  LatexName             partdegree
+  InTitle               1
+  Align			Center
+  LabelType		Top_Environment
+  LabelString		"Degree (submitted in partial fulfillment):"
+  Font
+    Color               blue
+  EndFont
+End
+
+Style FullDegree
+  LatexType             Command
+  LatexName             fulldegree
+  InTitle               1
+  Align			Center
+  LabelType		Top_Environment
+  LabelString		"Degree (submitted in fulfillment):"
+  Font
+    Color               blue
+  EndFont
+End
+
+Style Acknowledgements
+	LatexType	Environment
+	LatexName	ack
+	Align		Block
+	LabelType	Centered_Top_Environment
+	LabelString	Acknowledgements
+	LabelFont
+	  Series              Bold
+	  Size		      large
+	EndFont
+End
+
+Style ACMClass
+	LatexType	Environment
+	LatexName	acm
+	Align		Block
+	LabelType	Centered_Top_Environment
+	LabelString	"ACM Computing Classification"
+	LabelFont
+	  Series              Bold
+	  Size		      large
+	EndFont
+End
+
+Float
+	Type                  listing
+	GuiName               Listing
+	Placement             tbp
+	Extension             loa
+	NumberWithin          none
+	Style                 ruled
+	ListName              "List of Code Listings"
+	LaTeXBuiltin          false
+End

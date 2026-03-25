@@ -1,0 +1,32 @@
+\section{Research Hypotheses}
+\label{sec:research_objectives_research_hypothesis}
+
+The three hypotheses correspond directly to the three research goals above.
+
+\begin{itemize}
+
+    \item \textbf{H1 (The Composability Gap Hypothesis).}
+    We hypothesise that when pretrained generative models are logically composed via score addition, semantic composition is most reliable when the constituent concepts can be realised jointly without distorting one another. 
+    When concepts overlap, compete for the same structure, or impose joint constraints on the output, logical composition diverges from semantic composition.
+    These failures are not arbitrary: each class of failure exhibits predictable and characterisable failure modes, such as hybridisation, broken relations, or structural incoherence. 
+    This results in a measurable divergence in latent trajectories, where logical composition enters regions of the manifold that are semantically unreachable under a single integrated prompt
+
+    \item \textbf{H2 (The Representation Hypothesis).}
+    We hypothesise that the composability gap is primarily a representation problem
+    rather than an inference problem.
+    Specifically, entangled latent representations cause separately composed concepts
+    to interfere, and this cannot be corrected fully by modifying the inference-time
+    composition rule alone.
+    If this is correct, then models trained with explicit independence constraints
+    should reduce or close the gap, whereas models without such constraints should
+    continue to exhibit it even when composition rules are improved.
+
+    \item \textbf{H3 (The Clinical Independence Sufficiency Hypothesis).}
+    We hypothesise that approximate clinical independence between disease conditions
+    is sufficient for factorised composition to produce ecologically valid outputs.
+    If the disease-specific variation in a medical image can be approximately separated
+    from shared anatomical and acquisition variation, then composing per-pathology
+    models will produce outputs that correctly represent each condition, including
+    co-morbid combinations not present in the training data.
+
+\end{itemize}

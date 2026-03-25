@@ -2,6 +2,7 @@
 # Returns triplets of images (Normal, Cardiomegaly, Pleural Thickening) for head-nulling loss training.
 # Each image is a 512x512 grayscale DICOM (or pre-cached .npy), normalized to [-1, 1] for CheSS backbone.
 
+import hashlib
 import os
 import logging
 import random
@@ -486,6 +487,8 @@ class VinBigDataPairDataset(Dataset):
         window_width: float = 400.0,
         exclude_cross_disease_overlap: bool = False,
         use_cache: bool = False,
+        deterministic_pairs: bool = True,
+        pair_seed: int = 0,
     ):
         self.use_cache = bool(use_cache)
         if self.use_cache:
@@ -496,6 +499,8 @@ class VinBigDataPairDataset(Dataset):
         self.window_center = window_center
         self.window_width  = window_width
         self.exclude_cross_disease_overlap = bool(exclude_cross_disease_overlap)
+        self.deterministic_pairs = bool(deterministic_pairs)
+        self.pair_seed = int(pair_seed)
         self._df = None
 
         if not self.dicom_dir.exists():
@@ -535,6 +540,7 @@ class VinBigDataPairDataset(Dataset):
             print(f"  Scan complete. Dropped {len(all_unique) - len(valid)} corrupt/blank.")
         self.normal_ids = [iid for iid in self.normal_ids if iid in valid]
         self.cardio_ids = [iid for iid in self.cardio_ids if iid in valid]
+        self._pair_cardio_ids = self._build_pair_cardio_ids()
 
         print(f"[VinBigDataPairDataset]  mode={'cache-npy' if self.use_cache else 'dicom'}")
         print(f"  Normal: {len(self.normal_ids)} images")
@@ -554,11 +560,35 @@ class VinBigDataPairDataset(Dataset):
     def __len__(self) -> int:
         return min(len(self.normal_ids), len(self.cardio_ids))
 
+    def _build_pair_cardio_ids(self) -> List[str]:
+        if len(self.cardio_ids) == 0:
+            return []
+
+        if not self.deterministic_pairs:
+            return list(self.cardio_ids)
+
+        n_pairs = self.__len__()
+        cardio_ids = np.array(self.cardio_ids, dtype=object)
+        rng = np.random.default_rng(self.pair_seed)
+        ordered: List[str] = []
+        while len(ordered) < n_pairs:
+            ordered.extend(rng.permutation(cardio_ids).tolist())
+        return ordered[:n_pairs]
+
+    def get_pair_ids(self, idx: int) -> Tuple[str, str]:
+        pair_idx = idx % self.__len__()
+        norm_id = self.normal_ids[pair_idx % len(self.normal_ids)]
+        if self.deterministic_pairs:
+            cardio_id = self._pair_cardio_ids[pair_idx]
+        else:
+            cardio_id = self.cardio_ids[random.randint(0, len(self.cardio_ids) - 1)]
+        return norm_id, cardio_id
+
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         max_retries = 10
 
         # Normal (anchor)
-        norm_id    = self.normal_ids[idx % len(self.normal_ids)]
+        norm_id, cardio_id = self.get_pair_ids(idx)
         pixel_array = self._load_image(norm_id)
         if pixel_array is not None:
             x_norm = self._preprocess_image(pixel_array)
@@ -566,7 +596,6 @@ class VinBigDataPairDataset(Dataset):
             x_norm = self._load_with_retry(self.normal_ids, "Normal", max_retries)
 
         # Cardiomegaly (target)
-        cardio_id = self.cardio_ids[random.randint(0, len(self.cardio_ids) - 1)]
         x_cardio, bbox_cardio = self._load_disease_image(
             self.cardio_ids, self._cardio_bbox_lookup,
             "Cardiomegaly", initial_id=cardio_id, max_retries=max_retries,
@@ -800,6 +829,176 @@ class VinBigDataSingleClassDataset(Dataset):
                 raise RuntimeError(f"Too many consecutive corrupt files in {self.disease} pool")
 
         return self._preprocess_image(pixel_array), label, image_id
+
+
+class VinBigDataBinaryFlatDataset(Dataset):
+    """
+    Flat binary dataset over Normal and Cardiomegaly samples for latent export.
+
+    Each item corresponds to a single image with:
+      - image tensor in [-1, 1]
+      - binary label (0=normal, 1=cardiomegaly)
+      - image_id
+      - cardiomegaly bbox in [0, 1] (zeros for normal)
+      - has_bbox flag
+
+    Split handling:
+      - If the CSV already has a `split` column, it is used directly.
+      - Otherwise a deterministic hash split is applied:
+            train: 90%
+            val:    5%
+            test:   5%
+    """
+
+    def __init__(
+        self,
+        dicom_dir: str = "/datasets/mmolefe/vinbigdata/train",
+        csv_path: str = "/datasets/mmolefe/vinbigdata/train.csv",
+        img_size: int = 256,
+        split: str = "train",
+        exclude_cross_disease_overlap: bool = False,
+        use_cache: bool = False,
+    ):
+        if split not in {"train", "val", "test", "all"}:
+            raise ValueError(f"split must be one of train/val/test/all, got '{split}'")
+
+        self.use_cache = bool(use_cache)
+        if self.use_cache:
+            self.dicom_dir = Path(dicom_dir) / "images"
+        else:
+            self.dicom_dir = Path(dicom_dir)
+        self.img_size = int(img_size)
+        self.exclude_cross_disease_overlap = bool(exclude_cross_disease_overlap)
+        self.split = split
+
+        if not self.dicom_dir.exists():
+            raise FileNotFoundError(f"Image directory not found: {self.dicom_dir}")
+        if not Path(csv_path).exists():
+            raise FileNotFoundError(f"CSV file not found: {csv_path}")
+
+        df = pd.read_csv(csv_path)
+
+        self.normal_ids = self._filter_class(df, class_id=14)
+        raw_cardio_ids = self._filter_class(df, class_id=3)
+        if exclude_cross_disease_overlap:
+            self.cardio_ids = self._filter_class(df, class_id=3, exclude_class_id=11)
+        else:
+            self.cardio_ids = raw_cardio_ids
+
+        self._cardio_bbox_lookup = self._build_bbox_lookup(df, class_id=3)
+
+        if "split" in df.columns:
+            split_lookup = (
+                df[["image_id", "split"]]
+                .drop_duplicates(subset=["image_id"])
+                .assign(split=lambda x: x["split"].astype(str).str.lower())
+            )
+            self._split_lookup = dict(zip(split_lookup["image_id"], split_lookup["split"]))
+        else:
+            self._split_lookup = None
+
+        if split != "all":
+            self.normal_ids = [iid for iid in self.normal_ids if self._resolve_split(iid) == split]
+            self.cardio_ids = [iid for iid in self.cardio_ids if self._resolve_split(iid) == split]
+
+        import json
+
+        cache_path = self.dicom_dir.parent / f"valid_ids_binary_flat_{split}.json"
+        all_unique = list(set(self.normal_ids) | set(self.cardio_ids))
+        if cache_path.exists():
+            with open(cache_path) as f:
+                valid = set(json.load(f)) & set(all_unique)
+            print(f"[VinBigData] Loaded {len(valid)} valid IDs from binary-flat cache ({cache_path.name}).")
+        else:
+            print(f"[VinBigData] Pre-scanning {len(all_unique)} unique images for binary-flat dataset…")
+            valid = {iid for iid in all_unique if self._load_image(iid) is not None}
+            try:
+                with open(cache_path, "w") as f:
+                    json.dump(sorted(valid), f)
+                print(f"  Scan complete. Dropped {len(all_unique) - len(valid)} corrupt/blank.")
+            except OSError as exc:
+                print(f"  Scan complete. Dropped {len(all_unique) - len(valid)} corrupt/blank.")
+                print(f"  Skipping cache write ({exc.__class__.__name__}: {exc})")
+
+        self.normal_ids = sorted(iid for iid in self.normal_ids if iid in valid)
+        self.cardio_ids = sorted(iid for iid in self.cardio_ids if iid in valid)
+
+        self.records = []
+        self.records_by_label = {0: [], 1: []}
+
+        for image_id in self.normal_ids:
+            record = {
+                "image_id": image_id,
+                "label": 0,
+                "bbox": np.zeros(4, dtype=np.float32),
+                "has_bbox": 0.0,
+                "split": self._resolve_split(image_id),
+            }
+            self.records.append(record)
+            self.records_by_label[0].append(record)
+
+        for image_id in self.cardio_ids:
+            bbox = self._cardio_bbox_lookup.get(image_id, (0.0, 0.0, 0.0, 0.0))
+            bbox_np = np.asarray(bbox, dtype=np.float32)
+            has_bbox = float((bbox_np[2] - bbox_np[0]) > 1e-4)
+            record = {
+                "image_id": image_id,
+                "label": 1,
+                "bbox": bbox_np,
+                "has_bbox": has_bbox,
+                "split": self._resolve_split(image_id),
+            }
+            self.records.append(record)
+            self.records_by_label[1].append(record)
+
+        print(f"[VinBigDataBinaryFlatDataset] mode={'cache-npy' if self.use_cache else 'dicom'} split={split}")
+        print(f"  Normal: {len(self.normal_ids)} images")
+        print(f"  Cardiomegaly: {len(self.cardio_ids)} images ({len(self._cardio_bbox_lookup)} with bbox)")
+        print(f"  Total records: {len(self.records)}")
+
+    _filter_class = VinBigDataTripletDataset._filter_class
+    _build_bbox_lookup = VinBigDataTripletDataset._build_bbox_lookup
+    _load_image = VinBigDataTripletDataset._load_image
+    _load_npy = VinBigDataTripletDataset._load_npy
+    _load_dicom = VinBigDataTripletDataset._load_dicom
+    _preprocess_image = VinBigDataTripletDataset._preprocess_image
+
+    def _resolve_split(self, image_id: str) -> str:
+        if self._split_lookup is not None:
+            return self._split_lookup.get(image_id, "train")
+
+        digest = hashlib.md5(image_id.encode("utf-8")).hexdigest()
+        value = int(digest[:8], 16) / 0xFFFFFFFF
+        if value < 0.90:
+            return "train"
+        if value < 0.95:
+            return "val"
+        return "test"
+
+    def __len__(self) -> int:
+        return len(self.records)
+
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        record = self.records[idx]
+        label = int(record["label"])
+
+        for _ in range(10):
+            pixel_array = self._load_image(record["image_id"])
+            if pixel_array is not None:
+                image = self._preprocess_image(pixel_array)
+                return {
+                    "image": image,
+                    "label": torch.tensor(label, dtype=torch.long),
+                    "image_id": record["image_id"],
+                    "bbox": torch.from_numpy(np.asarray(record["bbox"], dtype=np.float32)),
+                    "has_bbox": torch.tensor(record["has_bbox"], dtype=torch.float32),
+                    "split": record["split"],
+                }
+
+            fallback_pool = self.records_by_label[label]
+            record = fallback_pool[random.randint(0, len(fallback_pool) - 1)]
+
+        raise RuntimeError("Too many consecutive corrupt files in VinBigDataBinaryFlatDataset")
 
 
 # Example usage and validation

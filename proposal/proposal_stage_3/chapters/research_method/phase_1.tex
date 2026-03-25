@@ -1,0 +1,145 @@
+\section{Phase 1: Characterising the Compositional Gap}
+\label{sec:phase_1}
+
+Phase 1 characterises the \emph{composability gap} which we define as the measurable divergence between semantic and logical composition.
+This phase directly advances Research Goal~1 and provides the first empirical test of Hypothesis~1.
+H1 predicts that logical and semantic composition will diverge most severely when concepts overlap, compete for shared spatial structure, or impose joint constraints on the output.
+This divergence is expected to be trajectory-level rather than a mere decoding coincidence.
+It further predicts that the endpoint of logical composition will be semantically unreachable. In other words, there does not exist a natural-language prompt that should be able to steer a standard text-conditioned model into the same latent basin.
+
+The argument of Phase 1 proceeds in three steps, each of which tests a distinct facet of H1:
+
+\begin{itemize}
+    \item We establish that such a composability gap exists and pair-dependent by comparing decoded outputs across concept pairs chosen to span a range of diverse combination pairs.
+    \item We characterise the gap dynamically by tracking full denoising trajectories and identifying \emph{when} and \emph{how} the two paradigms separate.
+    \item *We test whether the gap is structural by attempting to recover logical composition endpoints via a minimal, training-free image-to-text projection. Persistent failure here is a lower-bound argument that AND's target lies outside the region reachable by language conditioning.*
+\end{itemize}
+
+The formal study scales these three analyses to 24 concept pairs $\times$ 24 seeds ($N = 576$ pair-seed records per condition), using SD~3.5~Medium as the primary model.
+SD~3.5 was selected because its advanced capacity for semantic alignment provides a rigorous baseline: if the gap is visible here, it cannot be attributed to a weak semantic model.
+
+All conditions within a pair-seed record are initialised from the same Gaussian noise sample $x_T \sim \mathcal{N}(0, I)$.
+This shared-noise protocol is essential: it eliminates stochastic variation as a confound and ensures that any observed difference in trajectory or terminal latent is strictly a function of the composition operator, not the random seed.
+We compare five conditions per pair-seed: (i)~solo $c_1$, (ii)~solo $c_2$, (iii)~semantic composition (monolithic joint prompt), (iv)~PoE, and (v)~SuperDiff AND.
+
+
+\subsection{Concept Pair Taxonomy}
+\label{subsec:taxonomy}
+
+The first requirement of Research Goal~1 is to identify the conditions under which the gap is significant.
+We operationalise this by partitioning concept pairs into three groups, ordered by their predicted degree of inter-concept interference:
+
+\begin{enumerate}
+
+    \item \textbf{Independent/Orthogonal Pairs (Control):}
+    Concepts with low mutual information and minimal spatial overlap, such that each expert is expected to act on approximately disjoint regions of the latent space.
+    Example: \emph{a red car} and \emph{a green bicycle}.
+    These pairs provide a baseline against which divergence in the other groups is measured; H1 predicts the gap here will be small.
+
+    \item \textbf{Relational/Contextual Pairs (Test).}
+    Concepts that require learned structural interactions to be rendered correctly, such as \emph{a bird on a book} or \emph{a person holding an umbrella}.
+    A single joint prompt encodes the relation; score addition does not.
+    H1 predicts that logical composition will fail to replicate the learned preposition geometry, producing outputs in which the relation is broken or the objects are spatially incoherent.
+
+    \item \textbf{Adversarial/Collision Pairs (Stress).}
+    Concepts that occupy overlapping semantic slots in the training distribution, such as \emph{a cat} and \emph{a dog}, or \emph{a cat} and \emph{an owl}.
+    These concepts compete for the same spatial coordinates and feature statistics during score composition, making them the hardest test of H1.
+    The predicted failure modes are hybridisation (a single chimeric entity blending both concepts) and concept dominance (one concept's score field overwhelms the other).
+
+\end{enumerate}
+
+Figure~\ref{fig:composition_grid} shows decoded outputs from a representative set of pairs across these three groups, comparing SD~3.5 monolithic text conditioning against PoE and SuperDiff AND under shared-noise initialisation.
+Because each row starts from the same $x_T$, differences between columns are attributable to the composition operator alone.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\textwidth]{chapters/research_method/media/decoded_images_grid.png}
+    \caption{Terminal decoded images from shared-noise runs across concept pairs (rows) and five composition conditions (columns): SD~3.5 solo $A$, solo $B$, monolithic text ($A$ and $B$), PoE ($A \times B$), and SuperDiff AND ($A \wedge B$). Because every row shares the same $x_T$, differences between columns isolate the operator. Orthogonal pairs (e.g.\ red car / green bicycle) show broadly comparable outputs across all operators. Relational pairs (e.g.\ bird / book) show broken or absent structural relationships under logical composition while monolithic text preserves them. Adversarial pairs (e.g.\ cat / owl, cat / dog) exhibit hybridisation under AND (where a single chimeric entity blends both concepts) and concept dominance under PoE. Failure modes are pair-type-predictable, consistent with H1.}
+    \label{fig:composition_grid}
+\end{figure}
+
+Two failure modes are consistently observed in the relational and adversarial groups.
+The first is \textbf{hybridisation}: logical composition collapses two concepts into a single incoherent entity rather than negotiating a shared scene.
+In cat/owl pairs, SuperDiff AND frequently produces a single animal blending feline and avian features, whereas the monolithic prompt renders a cat and an owl as distinct co-present agents.
+This suggests that without the relational context of a joint sentence, the individual score fields compete at the same spatial coordinates rather than distributing across the image.
+The second failure mode is \textbf{concept dominance}: in relational pairs such as person/umbrella, one concept's score field systematically overwhelms the other, reducing the suppressed concept to a distorted artifact or removing it entirely.
+Crucially, both failure modes are pair-type-predictable: orthogonal pairs rarely exhibit either, while adversarial pairs almost always exhibit at least one.
+This pair-dependent structure is the first evidence that H1 is empirically testable and that the gap is not a random outcome.
+
+
+\subsection{Latent Trajectory Dynamics}
+\label{subsec:trajectories}
+
+Decoded images establish that a gap exists, but they cannot reveal when it emerges or whether it is a trajectory-level property of the denoising process.
+To answer both questions, we record the full latent state $z_t$ at every denoising step for every condition and jointly project all trajectories into a two-dimensional manifold using metric Multidimensional Scaling (MDS).
+
+MDS is preferred over PCA for this analysis because it is distance-centric: it minimises a stress criterion on pairwise $\ell_2$ distances.
+The embedded positions therefore faithfully reflect inter-condition separations in the original high-dimensional space rather than directions of maximal within-condition variance.
+Each condition traces a coloured path from the shared origin $x_T$. Colour encodes denoising progress from dark at high noise to light at the terminal step.
+The solo conditions serve as concept attractors, marking where single-concept flows terminate and providing reference anchors for reading where compositional conditions land relative to each concept alone.
+
+\begin{figure}[ht]
+    \centering
+    \includegraphics[width=\textwidth]{chapters/research_method/media/trajectory_manifold_grid.png}
+    \caption{Joint MDS projections of shared-noise denoising trajectories across a representative set of concept pairs. Each panel shows all five conditions (solo $A$, solo $B$, monolithic, PoE, SuperDiff AND) starting from the same $x_T$; colour encodes time from dark (high noise) to light (terminal). The fan-out pattern is consistent: monolithic and SuperDiff AND terminate in distinct endpoint regions across pairs. The solo branches serve as concept attractors and their separation reflects the degree of semantic conflict between concepts. Importantly, the divergence is not concentrated at the terminal step. Trajectories occupy different manifold quadrants from early in the denoising process.}
+    \label{fig:trajectory_manifold}
+\end{figure}
+
+Figure~\ref{fig:trajectory_manifold} illustrates a consistent \emph{fan-out} pattern: from a shared starting point, conditions separate and terminate in widely spaced regions of the manifold.
+The monolithic condition and SuperDiff AND are reliably among the most separated endpoint pairs.
+The visual differences observed in Figure~\ref{fig:composition_grid} are therefore not decoding artefacts but the terminal expression of trajectories that have been diverging throughout the denoising process.
+
+Importantly, the divergence is not temporally uniform.
+We decompose cumulative trajectory separation into 10-step bins across the full denoising schedule.
+Separation appears within the first 10 to 15 steps, consistent with coarse structure and global layout being established early in the high-noise regime where score fields are comparatively smooth.
+The majority of the total gap accumulates in the final low-noise steps, given that fine-grained attribute and object-identity conflicts must be resolved at this stage.
+This \emph{late amplification} has a direct mechanistic interpretation. Semantic composition can leverage a jointly trained representation of co-occurrence to resolve conflicts coherently. Logical score addition must instead accommodate the conflicting gradients of independent experts and the resulting compromise is most costly precisely when specificity matters most.
+
+\begin{figure}[ht]
+    \centering
+    \includegraphics[width=\textwidth]{chapters/research_method/media/temporal_decomposition.png}
+    \caption{Pooled quantitative gap summary across all 576 pair-seed records. \textit{Left}: KDE of terminal latent distance $d_T$ to SuperDiff AND for each condition; left-shifted mass indicates closer agreement with AND, right tails indicate larger mismatch. Monolithic text is most right-shifted, confirming it targets a different region than AND. Solo branches sit closer to AND because individual concept experts share more structure with AND than a jointly trained semantic representation does. \textit{Right}: temporal decomposition of cumulative divergence into 10-step bins from early (opaque, bottom) to late (transparent, top). Late bins dominate across all conditions, confirming that the bulk of the gap is injected in the final low-noise steps where fine-grained identity conflicts are resolved.}
+    \label{fig:temporal_decomposition}
+\end{figure}
+
+The success criterion for this subsection is that relational and adversarial pairs produce earlier and larger trajectory separation than orthogonal pairs.
+The majority of the gap should be concentrated in late denoising.
+If this pattern holds across the formal 576-record study, it provides the temporal and geometric account of H1 that the decoded-image analysis alone cannot supply.
+
+
+\subsection{Reachability Analysis}
+\label{subsec:reachability}
+
+The trajectory analysis establishes that logical and semantic composition diverge dynamically and terminate in different regions of latent space.
+A natural objection is that the monolithic prompt is simply not the right prompt: perhaps some other natural-language input would steer SD~3.5 into the same basin as SuperDiff AND, in which case the gap is a prompting limitation rather than a structural property of the manifold.
+
+We test this directly using a \emph{cycle-consistency} procedure.
+For each SuperDiff AND output, we project the generated image back into SD text-conditioning space using SD-IPC~\cite{ding2023sdipc}, a closed-form, training-free projection.
+SD-IPC maps a CLIP image embedding into the text-encoder conditioning space via the pseudo-inverse of CLIP's text-projection matrix, followed by L2 normalisation and scaling to match the magnitude of standard text-encoder outputs.
+The recovered embedding is then used as a surrogate conditioning signal to regenerate an image from the same initial noise.
+
+SD-IPC is deliberately the most conservative possible choice of inverter.
+It requires no training, no optimisation, and no learned parameters: it is the weakest inverter that can be constructed from frozen pretrained components alone.
+This makes the cycle-consistency result a \emph{lower bound} on structural inaccessibility.
+If SD-IPC cannot close the cycle for AND outputs such that the regenerated image is semantically distant from the original AND output, then no less-expressive approach will do better.
+The gap is therefore a lower-bound indication that AND's target lies outside the region of latent space reachable by natural language conditioning.
+Conversely, if SD-IPC succeeds for monolithic text outputs (which it should, since monolithic generation is by construction within the language-conditioned manifold), the comparison is internally controlled.
+
+\begin{figure}[ht]
+    \centering
+    \includegraphics[width=\textwidth]{chapters/research_method/media/cycle_consistency_multiseed.png}
+    \caption{Multi-seed cycle-consistency results under SD-IPC inversion (SD~1.4, seeds 42 to 46). Columns correspond to three conditions: (A)~sanity check (single-concept SD generation), (B)~monolithic text composition, and (C)~SuperDiff AND hybrid. Each cell shows the regenerated image and its CLIP cosine similarity to the source; green titles indicate a closed cycle ($\mathrm{sim} > 0.80$), red titles indicate a broken cycle. Conditions~A and~B close the cycle reliably across all seeds. Condition~C breaks the cycle consistently: the regenerated image drifts to the nearest on-manifold semantic mode (typically the dominant concept) rather than reproducing the hybrid. This pattern is robust across seeds and holds under SDXL and SD~3.5 in equivalent experiments, providing lower-bound evidence that AND's endpoint is structurally inaccessible to text conditioning.}
+    \label{fig:cycle_consistency}
+\end{figure}
+
+Figure~\ref{fig:cycle_consistency} illustrates the expected pattern.
+For sanity-check conditions (single-concept SD generation) and monolithic text composition, the regenerated image closely resembles the source, confirming that SD-IPC faithfully recovers embeddings within the language-conditioned manifold.
+For SuperDiff AND outputs, the cycle breaks. The regenerated image drifts toward the nearest on-manifold semantic mode, typically the concept that dominates the CLIP embedding of the chimeric output, rather than reproducing the hybrid.
+This pattern is robust across seeds and is most pronounced for adversarial pairs, where AND produces the most strongly off-manifold chimeric outputs.
+
+The success criterion for this analysis is a statistically significant difference in cycle-consistency similarity between AND outputs and monolithic outputs, holding across the 24-pair taxonomy.
+If this criterion is met, it confirms the third and strongest facet of H1: the composability gap is not merely a prompting failure but a structural property of the manifold geometry.
+
+In the formal 576-record study, we will report per-category cycle-consistency distributions (CLIP cosine similarity), the fraction of AND outputs for which the cycle breaks under the $0.80$ threshold, and the residual distance between AND trajectories and SD-IPC-regenerated trajectories.
+Together, these constitute the reachability map called for by Research Goal~1.
+
