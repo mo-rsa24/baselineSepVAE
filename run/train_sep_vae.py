@@ -126,6 +126,12 @@ def parse_args():
     p.add_argument("--weight_masked_rec",    type=float, default=0.0,
                    help="Masked anatomy recon weight: outside-bbox MSE with z_cardio=0. "
                         "Forces z_common not to encode cardiac shape. 0=disabled.")
+    p.add_argument("--weight_ctr_reg",       type=float, default=0.0,
+                   help="CTR regression weight: L1 loss forcing z_cardio to predict "
+                        "cardiac-to-thoracic ratio from CheXmask. 0=disabled. (D5+)")
+    p.add_argument("--chexmask_csv",         type=str,   default=None,
+                   help="Path to CheXmask VinDr-CXR_preprocessed.csv for mask supervision. "
+                        "If None, mask supervision is disabled. (D5+)")
     p.add_argument("--gan_start_step",       type=int,   default=5000,
                    help="Steps from the START OF THIS RUN before PatchGAN activates. "
                         "Counted from phase_start_global_step (not absolute global_step), "
@@ -665,6 +671,7 @@ def main():
         use_cache=args.use_cache,
         deterministic_pairs=args.deterministic_data,
         pair_seed=args.seed,
+        chexmask_csv=getattr(args, 'chexmask_csv', None),
     )
     train_loader_generator = None
     worker_init_fn = None
@@ -1090,6 +1097,7 @@ def main():
         weight_kl_disease=args.weight_kl_disease,
         weight_mi_factor=args.weight_mi_factor,
         weight_bbox_attn=args.weight_bbox_attn,
+        weight_ctr_reg=getattr(args, 'weight_ctr_reg', 0.0),
         weight_cardio_supcon=args.weight_cardio_supcon,
         supcon_temperature=args.supcon_temperature,
         sigma_inactive=args.sigma_inactive,
@@ -1193,6 +1201,9 @@ def main():
         bbox_arg           = batch.get('bbox_full')       # (2B, 4) or None
         has_bbox_arg       = batch.get('has_bbox')        # (2B,)  or None
         has_bbox_query_arg = batch.get('has_bbox_query')  # (2B,)  or None
+        heart_mask_arg     = batch.get('heart_mask')      # (2B, S, S) or None
+        ctr_arg            = batch.get('ctr')             # (2B,) or None
+        has_mask_arg       = batch.get('has_mask')        # (2B,) or None
 
         def loss_fn(params):
             total_loss, logs, z_c, z_ca, x_rec = sepvae_loss(
@@ -1208,6 +1219,9 @@ def main():
                 has_bbox_query=has_bbox_query_arg,
                 patch_disc_params=patch_disc_params_frozen,
                 patch_discriminator=patch_discriminator,
+                heart_mask=heart_mask_arg,
+                ctr=ctr_arg,
+                has_mask=has_mask_arg,
             )
             return total_loss, (logs, z_c, z_ca, x_rec)
         (loss, (logs, z_c, z_ca, x_rec)), grads = jax.value_and_grad(loss_fn, has_aux=True)(
@@ -1222,12 +1236,12 @@ def main():
         if _batch_stats_arg is not None:
             variables['batch_stats'] = _batch_stats_arg
         if IS_V2 and args.use_bbox_cross_attn:
-            x_rec, latents_dict, _, _ = sepvae.apply(
+            x_rec, latents_dict, _, _, _ = sepvae.apply(
                 variables, x, labels, key=key, train=False,
                 bbox=bbox_full, has_bbox=has_bbox,
             )
         else:
-            x_rec, latents_dict, _, _ = sepvae.apply(
+            x_rec, latents_dict, _, _, _ = sepvae.apply(
                 variables, x, labels, key=key, train=False,
             )
         return x_rec, latents_dict['attn_maps']
@@ -1255,6 +1269,11 @@ def main():
                 'disease_labels': jnp.array(batch_torch['disease_labels'].numpy()),
                 'bbox_disease1':  jnp.array(batch_torch['bbox_disease1'].numpy()),
             }
+            # CheXmask mask supervision fields (present when chexmask_csv was provided)
+            if 'heart_mask' in batch_torch:
+                batch['heart_mask'] = jnp.array(batch_torch['heart_mask'].numpy())   # (2B, S, S)
+                batch['ctr']        = jnp.array(batch_torch['ctr'].numpy())          # (2B,)
+                batch['has_mask']   = jnp.array(batch_torch['has_mask'].numpy())     # (2B,)
 
             # ── Assemble (2B, 4) bbox tensor for V2 cross-attention ──────────
             # Normal images get a zero bbox (will have has_bbox=0 → fallback query)

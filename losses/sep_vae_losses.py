@@ -365,6 +365,35 @@ def bbox_attention_loss(
 
 
 # ============================================================================
+# CTR Regression Loss  (Objective 1 — scalar cardiac-size anchor on z_cardio)
+# ============================================================================
+
+def ctr_regression_loss(
+    ctr_pred: jnp.ndarray,
+    ctr_gt:   jnp.ndarray,
+    has_mask: jnp.ndarray,
+) -> jnp.ndarray:
+    """
+    L1 regression loss: z_cardio must predict ground-truth CTR.
+
+    Forces z_cardio to encode cardiac size as a continuous scalar, not just
+    texture within the attention region.  Only supervised where CheXmask is
+    available (has_mask=1.0).
+
+    Args:
+        ctr_pred: (2B,) model predictions from GAP(z_disease) → Dense(1)
+        ctr_gt:   (2B,) ground-truth CTR from CheXmask (0.0 where unavailable)
+        has_mask: (2B,) float32 — 1.0 where CheXmask quality mask exists
+
+    Returns:
+        scalar: mean L1 error over supervised samples (0.0 if none supervised)
+    """
+    n_valid = jnp.maximum(jnp.sum(has_mask), 1.0)
+    l1 = jnp.abs(ctr_pred - ctr_gt)
+    return jnp.sum(l1 * has_mask) / n_valid
+
+
+# ============================================================================
 # Perceptual Loss  (Objective 2 — crisp reconstructions)
 # ============================================================================
 
@@ -452,6 +481,7 @@ class SepVAELossConfig:
     weight_kl_disease:   float = 5e-5
     weight_mi_factor:    float = 1.0    # κ — FactorVAE MI weight for encoder
     weight_bbox_attn:    float = 0.2
+    weight_ctr_reg:      float = 0.0   # CTR regression on z_cardio (D5+ mask supervision)
     weight_cardio_supcon: float = 0.05
     supcon_temperature:   float = 0.1
 
@@ -480,6 +510,9 @@ def sepvae_loss(
     has_bbox_query: Optional[jnp.ndarray] = None,
     patch_disc_params: Optional[Dict] = None,
     patch_discriminator: Optional[nn.Module] = None,
+    heart_mask: Optional[jnp.ndarray] = None,
+    ctr: Optional[jnp.ndarray] = None,
+    has_mask: Optional[jnp.ndarray] = None,
 ) -> Tuple[jnp.ndarray, Dict, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     """
     Binary SepVAE VAE loss (both discriminators frozen via stop_gradient at call site).
@@ -501,6 +534,9 @@ def sepvae_loss(
         has_bbox_query:      (2B,) float32 mask used only for the disease-head query path
         patch_disc_params:   PatchGAN discriminator params (frozen, stop_gradient outside)
         patch_discriminator: NLayerDiscriminator module (static — not a JAX array)
+        heart_mask:          (2B, S, S) float32 binary heart masks from CheXmask (D5+)
+        ctr:                 (2B,) float32 ground-truth CTR values from CheXmask (D5+)
+        has_mask:            (2B,) float32 — 1.0 where CheXmask quality mask exists (D5+)
 
     Returns:
         (total_loss, logs, z_c_pooled, z_ca_pooled, x_rec)
@@ -518,9 +554,10 @@ def sepvae_loss(
         variables['batch_stats'] = batch_stats
 
     key1, _ = jax.random.split(key)
-    x_rec, latents_dict, z_c_pooled, z_ca_pooled = model.apply(
+    x_rec, latents_dict, z_c_pooled, z_ca_pooled, ctr_pred = model.apply(
         variables, x, labels, key=key1, train=True,
         bbox=bbox, has_bbox=query_mask,
+        heart_mask=heart_mask,
     )
 
     mu_ca_pooled = jnp.mean(latents_dict['cardiomegaly'][0], axis=(1, 2))
@@ -612,6 +649,14 @@ def sepvae_loss(
     else:
         l_masked_rec = jnp.float32(0.0)
 
+    # ── 9. CTR regression loss (D5+ mask supervision) ────────────────────────
+    # Forces z_cardio to encode cardiac size as a continuous scalar dial.
+    # Only active when CheXmask masks are provided (weight_ctr_reg > 0 + has_mask).
+    if cfg.weight_ctr_reg > 0.0 and ctr is not None and has_mask is not None:
+        l_ctr = ctr_regression_loss(ctr_pred, ctr, has_mask)
+    else:
+        l_ctr = jnp.float32(0.0)
+
     # ── Total ─────────────────────────────────────────────────────────────────
     total_loss = (
         cfg.weight_rec          * l_rec
@@ -623,6 +668,7 @@ def sepvae_loss(
         + cfg.weight_gan        * l_gan
         + cfg.weight_tv         * l_tv
         + cfg.weight_masked_rec * l_masked_rec
+        + cfg.weight_ctr_reg    * l_ctr
     )
 
     inactive_mask = (labels == 0).astype(jnp.float32)
@@ -656,6 +702,8 @@ def sepvae_loss(
         'loss/gan_g':           l_gan,
         'loss/tv':              l_tv,
         'loss/masked_rec':      l_masked_rec,
+        'loss/ctr_reg':         l_ctr,
+        'metrics/ctr_pred_mean': jnp.mean(ctr_pred),
         'metrics/z_cardio_norm_inactive': inactive_norm_cardio,
         'metrics/z_cardio_norm_active':   active_norm_cardio,
         'metrics/z_cardio_norm_ratio':    active_inactive_ratio,

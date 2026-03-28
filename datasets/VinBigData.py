@@ -18,6 +18,39 @@ from PIL import Image
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# CheXmask helpers (module-level, shared)
+# ---------------------------------------------------------------------------
+
+def _decode_rle_chexmask(rle_string, height: int, width: int) -> np.ndarray:
+    """Decode a CheXmask RLE string to a binary uint8 mask. 1-indexed, row-major."""
+    if not isinstance(rle_string, str) or not rle_string.strip():
+        return np.zeros((height, width), dtype=np.uint8)
+    runs = np.array(rle_string.split(), dtype=np.int64)
+    starts  = runs[::2] - 1   # 1-indexed → 0-indexed
+    lengths = runs[1::2]
+    flat = np.zeros(height * width, dtype=np.uint8)
+    for s, l in zip(starts, lengths):
+        flat[s : s + l] = 1
+    return flat.reshape(height, width)
+
+
+def _compute_ctr_chexmask(
+    heart: np.ndarray,
+    left_lung: np.ndarray,
+    right_lung: np.ndarray,
+) -> Optional[float]:
+    """CTR = cardiac_width / thoracic_width. Returns None if masks are empty."""
+    thorax = (left_lung | right_lung).astype(bool)
+    cols_h = np.where(heart.astype(bool).any(axis=0))[0]
+    cols_t = np.where(thorax.any(axis=0))[0]
+    if not len(cols_h) or not len(cols_t):
+        return None
+    cardiac_w  = int(cols_h.max() - cols_h.min())
+    thoracic_w = int(cols_t.max() - cols_t.min())
+    return cardiac_w / thoracic_w if thoracic_w > 0 else None
+
+
 class VinBigDataTripletDataset(Dataset):
     """
     VinBigDataTripletDataset for Multi-head Salient sepVAE training.
@@ -489,6 +522,9 @@ class VinBigDataPairDataset(Dataset):
         use_cache: bool = False,
         deterministic_pairs: bool = True,
         pair_seed: int = 0,
+        chexmask_csv: Optional[str] = None,
+        chexmask_min_dice: float = 0.70,
+        mask_output_size: int = 16,
     ):
         self.use_cache = bool(use_cache)
         if self.use_cache:
@@ -501,6 +537,7 @@ class VinBigDataPairDataset(Dataset):
         self.exclude_cross_disease_overlap = bool(exclude_cross_disease_overlap)
         self.deterministic_pairs = bool(deterministic_pairs)
         self.pair_seed = int(pair_seed)
+        self.mask_output_size = int(mask_output_size)
         self._df = None
 
         if not self.dicom_dir.exists():
@@ -542,6 +579,16 @@ class VinBigDataPairDataset(Dataset):
         self.cardio_ids = [iid for iid in self.cardio_ids if iid in valid]
         self._pair_cardio_ids = self._build_pair_cardio_ids()
 
+        # CheXmask lookup: image_id → {heart_rle, ll_rle, rl_rle, height, width}
+        self._chexmask_lookup: dict = {}
+        if chexmask_csv is not None and Path(chexmask_csv).exists():
+            self._chexmask_lookup = self._build_chexmask_lookup(
+                chexmask_csv, chexmask_min_dice
+            )
+            print(f"  CheXmask: {len(self._chexmask_lookup)} images (min_dice={chexmask_min_dice})")
+        elif chexmask_csv is not None:
+            logger.warning(f"chexmask_csv not found: {chexmask_csv} — running without mask supervision")
+
         print(f"[VinBigDataPairDataset]  mode={'cache-npy' if self.use_cache else 'dicom'}")
         print(f"  Normal: {len(self.normal_ids)} images")
         print(f"  Cardiomegaly: {len(self.cardio_ids)} images ({len(self._cardio_bbox_lookup)} with bbox)")
@@ -556,6 +603,69 @@ class VinBigDataPairDataset(Dataset):
     _load_dicom        = VinBigDataTripletDataset._load_dicom
     _preprocess_image  = VinBigDataTripletDataset._preprocess_image
     _load_with_retry   = VinBigDataTripletDataset._load_with_retry
+
+    def _build_chexmask_lookup(self, chexmask_csv: str, min_dice: float) -> dict:
+        """Load CheXmask CSV → dict[image_id] = {heart_rle, ll_rle, rl_rle, height, width}."""
+        df = pd.read_csv(chexmask_csv)
+        df.columns = [c.strip() for c in df.columns]
+        id_col    = df.columns[0]
+        heart_col = next((c for c in df.columns if 'Heart' in c), None)
+        ll_col    = next((c for c in df.columns if 'Left'  in c and 'Lung' in c), None)
+        rl_col    = next((c for c in df.columns if 'Right' in c and 'Lung' in c), None)
+        h_col     = next((c for c in df.columns if c.lower() == 'height'), None)
+        w_col     = next((c for c in df.columns if c.lower() == 'width'),  None)
+        dice_col  = next((c for c in df.columns if 'Mean' in c and 'Dice' in c), None)
+
+        if dice_col and min_dice > 0:
+            df = df[df[dice_col] >= min_dice].copy()
+
+        lookup: dict = {}
+        for _, row in df.iterrows():
+            img_id = str(row[id_col])
+            lookup[img_id] = {
+                'heart_rle': row[heart_col] if heart_col is not None else '',
+                'll_rle':    row[ll_col]    if ll_col    is not None else '',
+                'rl_rle':    row[rl_col]    if rl_col    is not None else '',
+                'height':    int(row[h_col]) if h_col is not None and pd.notna(row.get(h_col)) else 1024,
+                'width':     int(row[w_col]) if w_col is not None and pd.notna(row.get(w_col)) else 1024,
+            }
+        return lookup
+
+    def _get_heart_mask_and_ctr(
+        self, image_id: str
+    ) -> Tuple[np.ndarray, float, float]:
+        """
+        Returns (heart_mask, ctr, has_mask).
+
+        heart_mask : float32 (mask_output_size, mask_output_size) binary {0,1}
+        ctr        : float in [0, 1] (0.0 if unavailable)
+        has_mask   : 1.0 if a quality mask exists, else 0.0
+        """
+        rec = self._chexmask_lookup.get(image_id)
+        if rec is None:
+            return (
+                np.zeros((self.mask_output_size, self.mask_output_size), dtype=np.float32),
+                0.0,
+                0.0,
+            )
+
+        h, w = rec['height'], rec['width']
+        heart = _decode_rle_chexmask(rec['heart_rle'], h, w)
+        ll    = _decode_rle_chexmask(rec['ll_rle'],    h, w)
+        rl    = _decode_rle_chexmask(rec['rl_rle'],    h, w)
+
+        ctr = _compute_ctr_chexmask(heart, ll, rl)
+        ctr = float(ctr) if ctr is not None else 0.0
+
+        # Resize heart mask to (mask_output_size, mask_output_size)
+        pil = Image.fromarray(heart, mode='L')
+        pil = pil.resize(
+            (self.mask_output_size, self.mask_output_size),
+            resample=Image.NEAREST,
+        )
+        heart_small = np.array(pil, dtype=np.float32)  # {0, 1} float32
+
+        return heart_small, ctr, 1.0
 
     def __len__(self) -> int:
         return min(len(self.normal_ids), len(self.cardio_ids))
@@ -601,10 +711,20 @@ class VinBigDataPairDataset(Dataset):
             "Cardiomegaly", initial_id=cardio_id, max_retries=max_retries,
         )
 
+        # CheXmask heart masks + CTR (zeros / has_mask=0 when unavailable)
+        heart_norm,   ctr_norm,   has_mask_norm   = self._get_heart_mask_and_ctr(norm_id)
+        heart_cardio, ctr_cardio, has_mask_cardio = self._get_heart_mask_and_ctr(cardio_id)
+
         return {
-            'x_norm':        x_norm,
-            'x_disease1':    x_cardio,
-            'bbox_disease1': bbox_cardio,   # (4,) [x0, y0, x1, y1] in [0, 1]
+            'x_norm':           x_norm,
+            'x_disease1':       x_cardio,
+            'bbox_disease1':    bbox_cardio,          # (4,)  [x0,y0,x1,y1] in [0,1]
+            'heart_mask_norm':  torch.from_numpy(heart_norm),    # (S, S)
+            'heart_mask_cardio':torch.from_numpy(heart_cardio),  # (S, S)
+            'ctr_norm':         torch.tensor(ctr_norm,   dtype=torch.float32),
+            'ctr_cardio':       torch.tensor(ctr_cardio, dtype=torch.float32),
+            'has_mask_norm':    torch.tensor(has_mask_norm,   dtype=torch.float32),
+            'has_mask_cardio':  torch.tensor(has_mask_cardio, dtype=torch.float32),
         }
 
 
@@ -612,12 +732,15 @@ def jax_pair_collate_fn(batch_list):
     """
     JAX-compatible collate for VinBigDataPairDataset (binary: Normal + Cardiomegaly).
 
-    Input: B pairs → stacked (B, 1, H, W) tensors
+    Input: B pairs → stacked tensors
     Output batch:
-        x_norm:        (B, 1, H, W)  Normal images
-        x_disease1:    (B, 1, H, W)  Cardiomegaly images
-        disease_labels:(2B,) — [0,...,0, 1,...,1]
-        bbox_disease1: (B, 4) cardio bboxes in [0,1]
+        x_norm:         (B, 1, H, W)   Normal images
+        x_disease1:     (B, 1, H, W)   Cardiomegaly images
+        disease_labels: (2B,)          [0,...,0, 1,...,1]
+        bbox_disease1:  (B, 4)         cardio bboxes in [0,1]
+        heart_mask:     (2B, S, S)     heart masks [norm..., cardio...], S=mask_output_size
+        ctr:            (2B,)          CTR values  [norm..., cardio...]
+        has_mask:       (2B,)          mask validity [norm..., cardio...]
     """
     B = len(batch_list)
 
@@ -631,11 +754,30 @@ def jax_pair_collate_fn(batch_list):
 
     bbox_disease1 = torch.stack([b['bbox_disease1'] for b in batch_list])
 
+    # CheXmask fields — ordered [norm×B, cardio×B] to match disease_labels ordering
+    heart_mask = torch.cat([
+        torch.stack([b['heart_mask_norm']   for b in batch_list]),  # (B, S, S)
+        torch.stack([b['heart_mask_cardio'] for b in batch_list]),  # (B, S, S)
+    ], dim=0)  # (2B, S, S)
+
+    ctr = torch.cat([
+        torch.stack([b['ctr_norm']   for b in batch_list]),   # (B,)
+        torch.stack([b['ctr_cardio'] for b in batch_list]),   # (B,)
+    ], dim=0)  # (2B,)
+
+    has_mask = torch.cat([
+        torch.stack([b['has_mask_norm']   for b in batch_list]),  # (B,)
+        torch.stack([b['has_mask_cardio'] for b in batch_list]),  # (B,)
+    ], dim=0)  # (2B,)
+
     return {
         'x_norm':         x_norm,
         'x_disease1':     x_disease1,
         'disease_labels': labels,          # (2B,)
         'bbox_disease1':  bbox_disease1,   # (B, 4)
+        'heart_mask':     heart_mask,      # (2B, S, S)
+        'ctr':            ctr,             # (2B,)
+        'has_mask':       has_mask,        # (2B,)
     }
 
 

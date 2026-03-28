@@ -347,22 +347,31 @@ class BboxCrossAttnHead(nn.Module):
     model a direct spatial query from epoch 1 — bypassing the slow convergence
     of a purely learned query.
 
+    D5+ mask supervision mode: if `heart_mask` is provided (B, H, W) binary
+    float32, it replaces the Gaussian prior with the normalised heart mask
+    directly. This gives a precise, per-pixel spatial prior from CheXmask
+    physician-validated segmentation masks. The cross-attention mechanism is
+    unchanged; only the spatial weighting changes.
+
     For Normal images (has_bbox=0.0): falls back to a learned query identical
     to DiseaseAttnHeadV2. KL tight prior + hard-zero nulling still drive
     z_disease → 0 for Normal images independent of the attention path.
 
     Mechanism:
         1. Project branch features → K, V  (B, HW, query_dim)
-        2. Compute Gaussian heatmap from bbox center + sigma  (B, H, W)
-        3. Weighted aggregate of K under heatmap  →  Q_bbox  (B, 1, query_dim)
-        4. Interpolate Q_bbox / Q_learned by has_bbox mask
+        2a. [Bbox mode]  Compute Gaussian heatmap from bbox center + sigma  (B, H, W)
+        2b. [Mask mode]  Normalise binary heart mask directly  (B, H, W)
+        3. Weighted aggregate of K under heatmap  →  Q_prior  (B, 1, query_dim)
+        4. Interpolate Q_prior / Q_learned by has_bbox mask
         5. Cross-attention: Q × K^T → softmax → attn_map  (B, H, W)
         6. Gate features: h * (attn_map * HW) → ConvHeadGN → (mu, logvar)
 
     Args:
-        h:        (B, H, W, C)  encoder branch features
-        bbox:     (B, 4)        [x0, y0, x1, y1] normalised [0,1]; zeros for Normal
-        has_bbox: (B,)          float mask: 1.0 = valid bbox, 0.0 = Normal / missing
+        h:          (B, H, W, C)  encoder branch features
+        bbox:       (B, 4)        [x0, y0, x1, y1] normalised [0,1]; zeros for Normal
+        has_bbox:   (B,)          float mask: 1.0 = valid bbox, 0.0 = Normal / missing
+        heart_mask: (B, H, W)     optional binary float32 mask from CheXmask (D5+)
+                                  if provided, replaces bbox Gaussian as spatial prior
     """
     out_channels: int
     hidden_channels: int = 256
@@ -375,6 +384,7 @@ class BboxCrossAttnHead(nn.Module):
         h: jnp.ndarray,
         bbox: Optional[jnp.ndarray] = None,
         has_bbox: Optional[jnp.ndarray] = None,
+        heart_mask: Optional[jnp.ndarray] = None,
     ):
         B, H, W, C = h.shape
         HW = H * W
@@ -395,33 +405,40 @@ class BboxCrossAttnHead(nn.Module):
             w_k = has_bbox[:, None, None]   # (B, 1, 1) broadcast over HW and D
             K = K * w_k + jax.lax.stop_gradient(K) * (1.0 - w_k)
 
-        if bbox is not None and has_bbox is not None:
-            # ── Gaussian spatial prior from bbox ──────────────────────────────
-            y_coords = (jnp.arange(H, dtype=jnp.float32) + 0.5) / H   # (H,)
-            x_coords = (jnp.arange(W, dtype=jnp.float32) + 0.5) / W   # (W,)
-            xx, yy   = jnp.meshgrid(x_coords, y_coords)                # (H, W)
+        if has_bbox is not None and (bbox is not None or heart_mask is not None):
+            if heart_mask is not None:
+                # ── D5+ mask mode: use CheXmask binary prior ──────────────────
+                # heart_mask: (B, H, W) float32 binary, already at latent resolution.
+                # Normalise so weights sum to 1 per image — same contract as Gaussian.
+                mask_flat = heart_mask.reshape(B, HW, 1)                     # (B, HW, 1)
+                prior_norm = mask_flat / (mask_flat.sum(axis=1, keepdims=True) + 1e-6)
+            else:
+                # ── D1–D4 mode: Gaussian spatial prior from bbox ───────────────
+                y_coords = (jnp.arange(H, dtype=jnp.float32) + 0.5) / H   # (H,)
+                x_coords = (jnp.arange(W, dtype=jnp.float32) + 0.5) / W   # (W,)
+                xx, yy   = jnp.meshgrid(x_coords, y_coords)                # (H, W)
 
-            cx = (bbox[:, 0] + bbox[:, 2]) * 0.5                          # (B,) centre x
-            cy = (bbox[:, 1] + bbox[:, 3]) * 0.5                          # (B,) centre y
-            # σ = bbox_width / 4 (quarter-width): Gaussian drops to ~14% at the bbox
-            # boundary, concentrating the prior inside the heart rather than spreading
-            # beyond it. Using 0.5 (half-width) would wash out into surrounding lungs,
-            # especially with VinBigData's union bboxes which are already oversized.
-            sx = jnp.maximum((bbox[:, 2] - bbox[:, 0]) * 0.25, 0.05)     # σ_x
-            sy = jnp.maximum((bbox[:, 3] - bbox[:, 1]) * 0.25, 0.05)     # σ_y
+                cx = (bbox[:, 0] + bbox[:, 2]) * 0.5                          # (B,) centre x
+                cy = (bbox[:, 1] + bbox[:, 3]) * 0.5                          # (B,) centre y
+                # σ = bbox_width / 4 (quarter-width): Gaussian drops to ~14% at the bbox
+                # boundary, concentrating the prior inside the heart rather than spreading
+                # beyond it. Using 0.5 (half-width) would wash out into surrounding lungs,
+                # especially with VinBigData's union bboxes which are already oversized.
+                sx = jnp.maximum((bbox[:, 2] - bbox[:, 0]) * 0.25, 0.05)     # σ_x
+                sy = jnp.maximum((bbox[:, 3] - bbox[:, 1]) * 0.25, 0.05)     # σ_y
 
-            gauss = jnp.exp(
-                -0.5 * (
-                    (xx[None] - cx[:, None, None]) ** 2 / sx[:, None, None] ** 2
-                  + (yy[None] - cy[:, None, None]) ** 2 / sy[:, None, None] ** 2
-                )
-            )   # (B, H, W)
+                gauss = jnp.exp(
+                    -0.5 * (
+                        (xx[None] - cx[:, None, None]) ** 2 / sx[:, None, None] ** 2
+                      + (yy[None] - cy[:, None, None]) ** 2 / sy[:, None, None] ** 2
+                    )
+                )   # (B, H, W)
 
-            gauss_flat = gauss.reshape(B, HW, 1)
-            gauss_norm = gauss_flat / (gauss_flat.sum(axis=1, keepdims=True) + 1e-6)
+                gauss_flat = gauss.reshape(B, HW, 1)
+                prior_norm = gauss_flat / (gauss_flat.sum(axis=1, keepdims=True) + 1e-6)
 
-            # Bbox-weighted aggregate of K  →  cross-attention query
-            Q_bbox = jnp.sum(K * gauss_norm, axis=1, keepdims=True)   # (B, 1, D)
+            # Prior-weighted aggregate of K  →  cross-attention query
+            Q_bbox = jnp.sum(K * prior_norm, axis=1, keepdims=True)   # (B, 1, D)
 
             # Blend the bbox-guided and learned fallback queries for positives.
             q_bbox_blend = (
@@ -434,7 +451,7 @@ class BboxCrossAttnHead(nn.Module):
             w = has_bbox[:, None, None]                                 # (B, 1, 1)
             Q = q_bbox_blend * w + Q_learned * (1.0 - w)               # (B, 1, D)
         else:
-            Q = Q_learned   # (B, 1, D)
+            Q = Q_learned   # (B, 1, D) — D0 or images without any spatial prior
 
         # ── Cross-attention: Q × K^T → attention map over spatial positions ──
         scale        = jnp.sqrt(jnp.array(self.query_dim, dtype=jnp.float32))
@@ -506,6 +523,7 @@ class SepVAEEncoderV2(nn.Module):
         train: bool = True,
         bbox: Optional[jnp.ndarray] = None,
         has_bbox: Optional[jnp.ndarray] = None,
+        heart_mask: Optional[jnp.ndarray] = None,
     ):
         B = x.shape[0]
 
@@ -522,7 +540,7 @@ class SepVAEEncoderV2(nn.Module):
         # Disease head
         if self.use_bbox_cross_attn:
             mu_d, logvar_d, attn_map = self.head_disease(
-                h_tg, bbox=bbox, has_bbox=has_bbox
+                h_tg, bbox=bbox, has_bbox=has_bbox, heart_mask=heart_mask,
             )
         else:
             mu_d, logvar_d, attn_map = self.head_disease(h_tg)
@@ -770,6 +788,11 @@ class SepVAEV2(nn.Module):
             z_channels=self.z_channels_common + self.z_channels_disease,
             se_reduction=8,
         )
+        # D5+ CTR regression head — freshly initialised when loading D3/D4 checkpoint.
+        # Takes GAP(z_disease) → scalar CTR prediction.  Supervised only when
+        # use_ctr_regression=True and ctr labels are provided.
+        # Single Dense(1) is sufficient: CTR is a linear function of the mean z_disease.
+        self.ctr_head = nn.Dense(1, name='ctr_head')
 
     def __call__(
         self,
@@ -780,9 +803,10 @@ class SepVAEV2(nn.Module):
         train: bool = True,
         bbox: Optional[jnp.ndarray] = None,
         has_bbox: Optional[jnp.ndarray] = None,
+        heart_mask: Optional[jnp.ndarray] = None,
     ):
         latents_dict = self.encoder(
-            x, train=train, bbox=bbox, has_bbox=has_bbox
+            x, train=train, bbox=bbox, has_bbox=has_bbox, heart_mask=heart_mask,
         )
         skip_feats = latents_dict.get('skip_feats', None)
         key_sample, _ = jax.random.split(key)
@@ -790,10 +814,15 @@ class SepVAEV2(nn.Module):
             latents_dict, labels, key_sample, disease_label_id=1,
         )
         x_rec = self.decoder(z_concat, skip_feats=skip_feats, train=train)
-        return x_rec, latents_dict, z_c_pooled, z_d_pooled
+        # CTR prediction from pooled z_disease posterior mean (no sampling — stable signal)
+        mu_d = latents_dict['cardiomegaly'][0]           # (2B, 16, 16, z_d_ch)
+        mu_d_pooled = jnp.mean(mu_d, axis=(1, 2))        # (2B, z_d_ch)
+        ctr_pred = self.ctr_head(mu_d_pooled)[:, 0]      # (2B,)
+        return x_rec, latents_dict, z_c_pooled, z_d_pooled, ctr_pred
 
-    def encode(self, x, bbox=None, has_bbox=None):
-        return self.encoder(x, train=False, bbox=bbox, has_bbox=has_bbox)
+    def encode(self, x, bbox=None, has_bbox=None, heart_mask=None):
+        return self.encoder(x, train=False, bbox=bbox, has_bbox=has_bbox,
+                            heart_mask=heart_mask)
 
     def decode(self, z, skip_feats=None):
         return self.decoder(z, skip_feats=skip_feats, train=False)
