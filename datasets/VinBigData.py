@@ -524,7 +524,7 @@ class VinBigDataPairDataset(Dataset):
         pair_seed: int = 0,
         chexmask_csv: Optional[str] = None,
         chexmask_min_dice: float = 0.70,
-        mask_output_size: int = 16,
+        mask_output_size: int = 256,
     ):
         self.use_cache = bool(use_cache)
         if self.use_cache:

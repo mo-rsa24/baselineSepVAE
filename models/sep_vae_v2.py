@@ -408,7 +408,13 @@ class BboxCrossAttnHead(nn.Module):
         if has_bbox is not None and (bbox is not None or heart_mask is not None):
             if heart_mask is not None:
                 # ── D5+ mask mode: use CheXmask binary prior ──────────────────
-                # heart_mask: (B, H, W) float32 binary, already at latent resolution.
+                # heart_mask: (B, Hm, Wm) float32 binary from batch (any resolution).
+                # Resize to latent spatial size (H, W) so this is resolution-agnostic.
+                hm_h, hm_w = heart_mask.shape[1], heart_mask.shape[2]
+                if hm_h != H or hm_w != W:
+                    heart_mask = jax.image.resize(
+                        heart_mask[..., None], (B, H, W, 1), method='nearest',
+                    )[:, :, :, 0]
                 # Normalise so weights sum to 1 per image — same contract as Gaussian.
                 mask_flat = heart_mask.reshape(B, HW, 1)                     # (B, HW, 1)
                 prior_norm = mask_flat / (mask_flat.sum(axis=1, keepdims=True) + 1e-6)
@@ -721,9 +727,19 @@ class SepVAEDecoderV2(nn.Module):
                 if i == 4 and 'layer3' in skip_feats:
                     layer3 = skip_feats['layer3']                 # (B, 16, 16, 1024)
                     if heart_mask is not None:
-                        # heart_mask: (B, 16, 16) float32 {0, 1}, 1 = cardiac pixel
+                        # heart_mask: (B, Hm, Wm) float32 {0, 1}, 1 = cardiac pixel.
+                        # Resize to match layer3 spatial size (16×16) if needed.
+                        gate_h, gate_w = layer3.shape[1], layer3.shape[2]
+                        B_dec = layer3.shape[0]
+                        if heart_mask.shape[1] != gate_h or heart_mask.shape[2] != gate_w:
+                            hm_gate = jax.image.resize(
+                                heart_mask[..., None],
+                                (B_dec, gate_h, gate_w, 1), method='nearest',
+                            )[:, :, :, 0]
+                        else:
+                            hm_gate = heart_mask
                         # cardiac_gate: 0 in cardiac region, 1 elsewhere → blocks bypass
-                        cardiac_gate = 1.0 - heart_mask[..., None]   # (B, 16, 16, 1)
+                        cardiac_gate = 1.0 - hm_gate[..., None]      # (B, 16, 16, 1)
                         layer3 = layer3 * cardiac_gate
                     h = nn.Conv(ch, (1, 1), use_bias=False, name='skip3_fuse')(
                         jnp.concatenate([h, layer3], axis=-1)
