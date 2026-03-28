@@ -1,42 +1,32 @@
 #!/usr/bin/env bash
-# D0-mask — Full mask supervision from scratch (no resume, no bbox supervision)
+# M0 — Smoke test (mask curriculum, stage 0)
 #
 # Purpose:
-#   Train SepVAEV2 from random initialisation with CheXmask supervision active
-#   from epoch 1 and bbox attention loss disabled. Tests whether mask supervision
-#   alone (without bbox ever being used) is sufficient for z_cardio disentanglement.
+#   Verify the full pipeline runs end-to-end with CheXmask dataloader active.
+#   No supervision beyond reconstruction + KL. CTR regression OFF.
+#   This stage exists only to catch import errors, shape mismatches, and OOM
+#   before committing GPU time to a full run.
 #
-# Key differences vs the D0→D3 curriculum:
-#   - No --resume (fresh encoder, decoder, discriminators)
-#   - weight_bbox_attn=0.0 — bbox never used as a supervision signal
-#   - weight_ctr_reg=1.0   — CTR regression active from epoch 1
-#   - kl_warmup_epochs=10  — prevents posterior collapse when z_cardio is random
-#   - lr_vae=1e-4          — full rate (not the conservative 5e-5 for mature weights)
-#   - EPOCHS=200           — encoder/decoder learn from scratch, need more time
-#   - GAN starts at step 5000 — reconstruction must stabilise first
+# Mask curriculum:
+#   M0 (this) → M1 → M2 → M3
+#   Mirrors the original bbox curriculum: D0 → D1 → D2 → D3
 #
-# What to watch on W&B:
-#   loss/ctr_reg        — should drop from ~0.15 toward ~0.02 within 20 epochs
-#   metrics/ctr_pred_mean — should converge toward dataset mean CTR (~0.47)
-#   metrics/z_cardio_norm_ratio — active/inactive ratio, target > 2.0
-#   Manifold plots      — Normal / Cardiomegaly should separate along a CTR axis
-#
-# Success criterion (run after ep160+):
-#   conda run -n jaxstack python scripts/latent_traversal_medsam.py \
-#     --checkpoint runs_sepvae/d0_mask_from_scratch-*/checkpoints/checkpoint_final.pkl \
-#     --output results/traversal_d0_mask/
-#   Target: Δarea > ±500px across α=0→2 traversal
+# What this stage tests:
+#   - CheXmask CSV loads and matches all 14,029 training images
+#   - heart_mask (2B, 16, 16) flows through collate → JAX → model without error
+#   - ctr_head forward pass works (even though weight_ctr_reg=0.0 here)
+#   - Basic reconstruction starts (loss/reconstruction < 0.05 by epoch 5)
 #
 # Submit:
-#   sbatch slurm_scripts/d0_mask_from_scratch.slurm
+#   sbatch slurm_scripts/m0_smoke.slurm
 
-#SBATCH --job-name=sepvae-d0-mask
+#SBATCH --job-name=sepvae-m0-smoke
 #SBATCH --nodelist=mscluster107
 #SBATCH --partition=biggpu
-#SBATCH --time=72:00:00
+#SBATCH --time=02:00:00
 #SBATCH --ntasks=1
-#SBATCH --output=logs/sepvae-d0-mask-%j.out
-#SBATCH --error=logs/sepvae-d0-mask-%j.err
+#SBATCH --output=logs/sepvae-m0-smoke-%j.out
+#SBATCH --error=logs/sepvae-m0-smoke-%j.err
 
 set -euo pipefail
 
@@ -57,9 +47,9 @@ CHESS_CHECKPOINT="${CHESS_CHECKPOINT:-/datasets/mmolefe/chess/pretrained_weights
 OUTPUT_ROOT="${OUTPUT_ROOT:-${WORKDIR}/runs_sepvae}"
 
 # ── Experiment ─────────────────────────────────────────────────────────────────
-EXP_NAME="d0_mask_from_scratch"
-EPOCHS=200
-KL_WARMUP_EPOCHS=10        # Ramp KL 0→1 over first 10 epochs — prevents early collapse
+EXP_NAME="m0_smoke"
+EPOCHS=5
+KL_WARMUP_EPOCHS=0
 
 # ── Model ──────────────────────────────────────────────────────────────────────
 IMG_SIZE=256
@@ -69,26 +59,24 @@ ATTN_QUERY_DIM=256
 ATTN_HEADS=4
 DECODER_RES_BLOCKS=3
 BBOX_QUERY_MIX=1.0
-BBOX_DROPOUT_PROB=0.0      # No bbox dropout — mask supervision covers all images
+BBOX_DROPOUT_PROB=0.0
 
-# ── Loss weights ──────────────────────────────────────────────────────────────
+# ── Loss weights — recon + KL only ────────────────────────────────────────────
 WEIGHT_REC=1.0
 WEIGHT_KL_COMMON=1e-4
 WEIGHT_KL_DISEASE=5e-5
 KL_FREE_BITS=0.5
-WEIGHT_MI_FACTOR=1.0
-WEIGHT_BBOX_ATTN=0.0       # Pure mask — bbox attention loss disabled
-WEIGHT_CTR_REG=1.0         # CTR regression active from epoch 1
-WEIGHT_CARDIO_SUPCON=0.05
-WEIGHT_PERCEPTUAL=0.05
-WEIGHT_GAN=0.1
-WEIGHT_TV=0.005
-WEIGHT_MASKED_REC=0.3      # Start conservative — decoder learning from scratch
+WEIGHT_MI_FACTOR=0.0       # FactorVAE off — not needed for smoke test
+WEIGHT_BBOX_ATTN=0.0       # No bbox supervision ever
+WEIGHT_CTR_REG=0.0         # CTR off in M0 — just verify pipeline
+WEIGHT_CARDIO_SUPCON=0.0   # Supcon off in M0
+WEIGHT_PERCEPTUAL=0.0
+WEIGHT_GAN=0.0
+WEIGHT_TV=0.0
+WEIGHT_MASKED_REC=0.0
 SIGMA_INACTIVE=0.1
 
-# ── GAN — delayed start ────────────────────────────────────────────────────────
-# step 5000 ≈ 12 epochs at batch=6 on ~14k pairs → reconstruction stabilises first
-GAN_START_STEP=5000
+GAN_START_STEP=99999       # GAN never starts in M0
 LR_PATCH_DISC=1e-4
 DISC_R1_PENALTY=0.0
 
@@ -97,7 +85,7 @@ BATCH_SIZE=6
 NUM_WORKERS=8
 EVAL_NUM_WORKERS=0
 SEED=0
-LR_VAE=1e-4                # Full rate — training from scratch, not fine-tuning
+LR_VAE=1e-4
 LR_DISC=1e-4
 WEIGHT_DECAY=1e-4
 GRAD_CLIP=1.0
@@ -106,7 +94,7 @@ GRAD_CLIP=1.0
 SAMPLE_EVERY=5
 MANIFOLD_EVERY=5
 SAVE_EVERY=5
-EVAL_SUBSET_SIZE=1024
+EVAL_SUBSET_SIZE=256       # Smaller eval for smoke test
 WANDB="${WANDB:-1}"
 WANDB_PROJECT="baseline-sepvae"
 
@@ -116,8 +104,7 @@ WANDB_PROJECT="baseline-sepvae"
 [[ -f "$CHESS_CHECKPOINT" ]] || die "CheSS weights not found: $CHESS_CHECKPOINT"
 [[ -f "$CHEXMASK_CSV"     ]] || die "CheXmask CSV not found: $CHEXMASK_CSV"
 
-# ── Environment ────────────────────────────────────────────────────────────────
-banner "D0 Mask From Scratch — pure mask supervision, no bbox, no resume"
+banner "M0 Smoke — mask curriculum stage 0"
 cd "$WORKDIR"
 mkdir -p logs
 
@@ -135,18 +122,11 @@ mamba activate "${ENV_NAME}" 2>/dev/null || conda activate "${ENV_NAME}"
 set -u
 ok "Activated: ${ENV_NAME}"
 
-kv "Node / GPU"          "$(hostname)  CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
-kv "Exp"                 "$EXP_NAME  (fresh weights, epoch 1 → ${EPOCHS})"
-kv "CheXmask CSV"        "$CHEXMASK_CSV"
-kv "PARADIGM"            "pure mask supervision — bbox attention loss DISABLED"
-kv "weight_bbox_attn"    "${WEIGHT_BBOX_ATTN}  (disabled)"
-kv "weight_ctr_reg"      "${WEIGHT_CTR_REG}  (active from epoch 1)"
-kv "weight_masked_rec"   "${WEIGHT_MASKED_REC}"
-kv "kl_warmup_epochs"    "${KL_WARMUP_EPOCHS}"
-kv "gan_start_step"      "${GAN_START_STEP}  (~12 epochs warm-up)"
-kv "Batch / lr_vae"      "${BATCH_SIZE} / ${LR_VAE}"
+kv "Node / GPU"     "$(hostname)  CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
+kv "Exp"            "$EXP_NAME  (fresh weights, epochs 1 → ${EPOCHS})"
+kv "CheXmask CSV"   "$CHEXMASK_CSV"
+kv "Purpose"        "pipeline verification only — recon + KL, no supervision signals"
 
-# ── Launch ─────────────────────────────────────────────────────────────────────
 banner "Launching ${EXP_NAME}"
 python -u run/train_sep_vae.py \
   --dicom_dir              "$DATA_DIR" \
@@ -210,5 +190,5 @@ python -u run/train_sep_vae.py \
   \
   $( [[ "$WANDB" == "1" ]] && echo "--wandb --wandb_project $WANDB_PROJECT" )
 
-ok "D0 mask from scratch complete"
-ok "Next: run latent_traversal_medsam.py — success if Δarea > ±500px"
+ok "M0 smoke complete — check loss/reconstruction < 0.05 before running M1"
+ok "Resume path for M1: runs_sepvae/m0_smoke-<timestamp>/checkpoints/checkpoint_final.pkl"
