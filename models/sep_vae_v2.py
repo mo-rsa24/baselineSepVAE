@@ -795,5 +795,5 @@ class SepVAEV2(nn.Module):
     def encode(self, x, bbox=None, has_bbox=None):
         return self.encoder(x, train=False, bbox=bbox, has_bbox=has_bbox)
 
-    def decode(self, z):
-        return self.decoder(z, train=False)
+    def decode(self, z, skip_feats=None):
+        return self.decoder(z, skip_feats=skip_feats, train=False)

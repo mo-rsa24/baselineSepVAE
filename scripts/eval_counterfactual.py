@@ -72,7 +72,8 @@ def _merge_params(target, source):
 def load_model_from_checkpoint(ckpt_path: str, img_size: int = 256,
                                 z_common: int = 16, z_disease: int = 16,
                                 attn_query_dim: int = 256, attn_heads: int = 4,
-                                bbox_query_mix: float = 0.7):
+                                bbox_query_mix: float = 0.7,
+                                decoder_res_blocks: int = 3):
     model = SepVAEV2(
         z_channels_common=z_common,
         z_channels_disease=z_disease,
@@ -80,6 +81,7 @@ def load_model_from_checkpoint(ckpt_path: str, img_size: int = 256,
         attn_heads=attn_heads,
         use_bbox_cross_attn=True,
         bbox_query_mix=bbox_query_mix,
+        decoder_res_blocks=decoder_res_blocks,
     )
 
     dummy_x      = jnp.ones((1, img_size, img_size, 1))
@@ -113,10 +115,31 @@ def encode_batch(model, params, x, bbox=None, has_bbox=None):
     return model.apply(variables, x, method=model.encode, **kwargs)
 
 
-def decode_z(model, params, z_common_map, z_disease_map):
-    """Run decoder with the given spatial latent maps."""
+def decode_z(model, params, z_common_map, z_disease_map, skip_feats=None):
+    """Run decoder with the given spatial latent maps.
+
+    skip_feats: dict with 'layer3' (B,16,16,1024) and 'layer2' (B,32,32,512)
+    from the encoder forward pass.  Must be passed for sharp reconstructions —
+    the decoder was trained with these skip connections every step.
+    """
     z_concat = jnp.concatenate([z_common_map, z_disease_map], axis=-1)
-    return model.apply({'params': params}, z_concat, method=model.decode)
+    return model.apply({'params': params}, z_concat, skip_feats, method=model.decode)
+
+
+def _concat_skip_feats(list_of_skip_feats):
+    """Concatenate a list of skip_feats dicts along the batch axis."""
+    if not list_of_skip_feats or list_of_skip_feats[0] is None:
+        return None
+    keys = list_of_skip_feats[0].keys()
+    return {k: np.concatenate([sf[k] for sf in list_of_skip_feats], axis=0)
+            for k in keys}
+
+
+def _slice_skip(skip_feats, idx):
+    """Slice skip_feats dict to index range idx (slice or int array)."""
+    if skip_feats is None:
+        return None
+    return {k: jnp.array(v[idx]) for k, v in skip_feats.items()}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -137,67 +160,189 @@ def save_counterfactual_grid(
     n: int = 8,
 ):
     """
-    Grid layout (each cell = 256×256 grayscale):
+    One row per X-ray.  Columns show what changes as we modify the disease latent.
 
-      Row 0: Normal    | orig | anatomy-only | disease-injected |
-      Row 1: Cardio    | orig | anatomy-only | disease-injected |
+    Normal images (top section) — 5 columns:
+      Original | Reconstruction | Anatomy-only (z_d=0) | +Disease injected | |Δ| diff map
 
-    Each block of 3 columns covers one sample.
+    Cardiomegaly images (bottom section) — 5 columns:
+      Original (+bbox) | Reconstruction | Anatomy-only (z_d=0) | Own disease re-injected | |Δ| diff map
+
+    The |Δ| column is abs(disease_version - anatomy_only), hot colormap, showing
+    exactly which pixels changed when the disease latent was active.
     """
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     import matplotlib.patches as mpatches
+    from matplotlib.colors import Normalize as MplNorm
+    from matplotlib.cm import ScalarMappable
 
-    def _prep(arr):
-        """(B, H, W, 1) → list of (H, W) float32 numpy arrays."""
-        arr_np = np.array(arr)
-        return [np.clip(arr_np[i, :, :, 0], 0, 1) for i in range(len(arr_np))]
+    def _prep(arr, is_input=False):
+        """(B, H, W, 1) → list of (H, W) float32 in [0,1].
+
+        Dataset images are in [-1, 1] (x * 2 - 1 in _preprocess_image).
+        Decoder output (sigmoid) is already in [0, 1].
+        Matching make_recon_grid in train_sep_vae.py:
+            inputs:  (x + 1) / 2   — same as training W&B logger
+            outputs: clip(x, 0, 1) — sigmoid output, already [0,1]
+        """
+        a = np.array(arr)
+        if is_input:
+            a = (a + 1.0) / 2.0   # [-1,1] → [0,1]
+        return [np.clip(a[i, :, :, 0], 0, 1) for i in range(len(a))]
 
     B = min(n, x_normal.shape[0])
-
-    rows = {
-        'Normal':      (_prep(x_normal[:B]),    _prep(anatomy_normal[:B]),  _prep(injected_normal[:B])),
-        'Cardio':      (_prep(x_cardio[:B]),     _prep(anatomy_cardio[:B]),  _prep(injected_cardio[:B])),
-    }
-    col_titles = ['Original', 'Anatomy-only\n(z_cardio=0)', 'Disease-injected\n(mean z_cardio)']
-
-    fig, axes = plt.subplots(
-        2, B * 3,
-        figsize=(B * 3 * 1.6, 2 * 2.2),
-        squeeze=False,
-    )
-
     bboxes_np = np.array(bboxes_cardio)
 
-    for row_idx, (class_name, (orig, anatomy, injected)) in enumerate(rows.items()):
-        for s in range(B):
-            for col_offset, (img, col_title) in enumerate(zip(
-                [orig[s], anatomy[s], injected[s]], col_titles
-            )):
-                ax = axes[row_idx][s * 3 + col_offset]
-                ax.imshow(img, cmap='gray', vmin=0, vmax=1)
+    # Raw dataset images are in [-1,1]; decoder outputs are in [0,1]
+    orig_n    = _prep(x_normal[:B],       is_input=True)
+    orig_c    = _prep(x_cardio[:B],       is_input=True)
+    recon_n   = _prep(recon_normal[:B])
+    recon_c   = _prep(recon_cardio[:B])
+    anat_n    = _prep(anatomy_normal[:B])
+    anat_c    = _prep(anatomy_cardio[:B])
+    inj_n     = _prep(injected_normal[:B])
+    inj_c     = _prep(injected_cardio[:B])
 
-                # Draw GT bbox on Cardiomegaly original
-                if class_name == 'Cardio' and col_offset == 0 and s < len(bboxes_np):
-                    bx = bboxes_np[s]
-                    if bx[2] - bx[0] > 1e-4:
-                        H, W = img.shape
-                        rect = mpatches.Rectangle(
-                            (bx[0] * W, bx[1] * H),
-                            (bx[2] - bx[0]) * W, (bx[3] - bx[1]) * H,
-                            linewidth=1.0, edgecolor='lime', facecolor='none',
-                        )
-                        ax.add_patch(rect)
+    # Diff maps: abs(disease version - anatomy-only).
+    # Scale adaptively to the 99th percentile of the pooled differences so weak
+    # disease signal is still visible.  Print the actual scale so the user knows
+    # whether the differences are meaningful or noise-level.
+    raw_diff_n = [np.abs(inj_n[i] - anat_n[i]) for i in range(B)]
+    raw_diff_c = [np.abs(inj_c[i] - anat_c[i]) for i in range(B)]
+    all_raw = np.concatenate([d.ravel() for d in raw_diff_n + raw_diff_c])
+    diff_scale = max(float(np.percentile(all_raw, 99)), 1e-4)
+    print(f"  Diff map scale (p99): {diff_scale:.4f}  "
+          f"max_n={max(d.max() for d in raw_diff_n):.4f}  "
+          f"max_c={max(d.max() for d in raw_diff_c):.4f}")
+    diff_n = [np.clip(raw_diff_n[i] / diff_scale, 0, 1) for i in range(B)]
+    diff_c = [np.clip(raw_diff_c[i] / diff_scale, 0, 1) for i in range(B)]
 
-                ax.axis('off')
-                if row_idx == 0 and s == 0:
-                    ax.set_title(col_title, fontsize=7)
-            axes[row_idx][s * 3].set_ylabel(class_name, fontsize=8)
+    N_COLS = 5
+    col_labels = [
+        'Original',
+        'Reconstruction\n(z_c + z_d → decode)',
+        'Anatomy-only\n(z_disease = 0)',
+        'Disease active\n(Normal: +mean z_cardio\nCardio: own z_disease)',
+        f'|Δ| diff\n(disease − anatomy)\nscale={diff_scale:.3f}',
+    ]
 
-    plt.suptitle('Counterfactual Reconstructions — Acid Test', fontsize=9, y=1.01)
-    plt.tight_layout(pad=0.4)
+    # Total rows: B Normal + 1 spacer + B Cardio
+    n_rows = 2 * B + 1
+    cell_h = 2.0   # inches per row
+    cell_w = 2.0   # inches per column
+    label_w = 1.2  # left label column width
+
+    fig = plt.figure(figsize=(N_COLS * cell_w + label_w, n_rows * cell_h))
+
+    # GridSpec: rows = all image rows + spacer; cols = label + 5 image cols
+    from matplotlib.gridspec import GridSpec
+    gs = GridSpec(
+        n_rows, N_COLS + 1,
+        figure=fig,
+        hspace=0.04,
+        wspace=0.03,
+        width_ratios=[label_w / cell_w] + [1.0] * N_COLS,
+    )
+
+    # Section header font
+    header_kw  = dict(fontsize=10, fontweight='bold', va='center', ha='right')
+    row_lbl_kw = dict(fontsize=8,  va='center', ha='right', color='#333333')
+
+    def _draw_section_label(row, text, color):
+        ax = fig.add_subplot(gs[row, 0])
+        ax.text(0.92, 0.5, text, transform=ax.transAxes,
+                fontsize=10, fontweight='bold', va='center', ha='right', color=color)
+        ax.axis('off')
+
+    def _img_ax(row, col):
+        return fig.add_subplot(gs[row, col + 1])  # +1 for label column
+
+    # ── Column titles (above first row) ─────────────────────────────────────────
+    for ci, label in enumerate(col_labels):
+        ax = _img_ax(0, ci)
+        ax.set_title(label, fontsize=8, pad=4, linespacing=1.3)
+
+    # ── Normal rows ─────────────────────────────────────────────────────────────
+    for i in range(B):
+        row = i
+        imgs = [orig_n[i], recon_n[i], anat_n[i], inj_n[i], diff_n[i]]
+        cmaps = ['gray', 'gray', 'gray', 'gray', 'hot']
+
+        for ci, (img, cmap) in enumerate(zip(imgs, cmaps)):
+            ax = _img_ax(row, ci)
+            ax.imshow(img, cmap=cmap, vmin=0, vmax=1, interpolation='bilinear')
+            ax.axis('off')
+
+        # Row label
+        ax_lbl = fig.add_subplot(gs[row, 0])
+        ax_lbl.text(0.92, 0.5, f'Normal #{i+1}', transform=ax_lbl.transAxes,
+                    **row_lbl_kw)
+        ax_lbl.axis('off')
+
+    # ── Spacer row ───────────────────────────────────────────────────────────────
+    spacer_row = B
+    for ci in range(N_COLS + 1):
+        ax = fig.add_subplot(gs[spacer_row, ci])
+        ax.set_facecolor('#dddddd')
+        ax.axis('off')
+        if ci == 0:
+            ax.text(0.5, 0.5, '─── Cardiomegaly ───', transform=ax.transAxes,
+                    fontsize=9, fontweight='bold', va='center', ha='center',
+                    color='#222222')
+
+    # ── Cardiomegaly rows ────────────────────────────────────────────────────────
+    for i in range(B):
+        row = B + 1 + i
+        imgs  = [orig_c[i], recon_c[i], anat_c[i], inj_c[i], diff_c[i]]
+        cmaps = ['gray', 'gray', 'gray', 'gray', 'hot']
+
+        for ci, (img, cmap) in enumerate(zip(imgs, cmaps)):
+            ax = _img_ax(row, ci)
+            ax.imshow(img, cmap=cmap, vmin=0, vmax=1, interpolation='bilinear')
+
+            # GT bbox on Original only
+            if ci == 0 and i < len(bboxes_np):
+                bx = bboxes_np[i]
+                if bx[2] - bx[0] > 1e-4:
+                    H_im, W_im = img.shape
+                    rect = mpatches.Rectangle(
+                        (bx[0] * W_im, bx[1] * H_im),
+                        (bx[2] - bx[0]) * W_im, (bx[3] - bx[1]) * H_im,
+                        linewidth=1.2, edgecolor='#00ff88', facecolor='none',
+                    )
+                    ax.add_patch(rect)
+            ax.axis('off')
+
+        # Row label
+        ax_lbl = fig.add_subplot(gs[row, 0])
+        ax_lbl.text(0.92, 0.5, f'Cardio #{i+1}', transform=ax_lbl.transAxes,
+                    **row_lbl_kw)
+        ax_lbl.axis('off')
+
+    # ── Mean diff maps ───────────────────────────────────────────────────────────
+    # Save separately — one per class
     save_path.parent.mkdir(parents=True, exist_ok=True)
+    for tag, diffs in [('normal', diff_n), ('cardio', diff_c)]:
+        mean_diff = np.mean(np.stack(diffs, axis=0), axis=0)
+        fig_d, ax_d = plt.subplots(1, 1, figsize=(3.5, 3.5))
+        im = ax_d.imshow(mean_diff, cmap='hot', vmin=0, vmax=1)
+        ax_d.set_title(f'Mean |Δ| — {tag} (n={B})\nwhere disease latent changed the image\n'
+                       f'(scale = p99 = {diff_scale:.4f})', fontsize=9)
+        ax_d.axis('off')
+        plt.colorbar(im, ax=ax_d, fraction=0.046, pad=0.04).set_label(
+            f'|Δ| / {diff_scale:.4f}  (1.0 = {diff_scale:.4f} intensity)', fontsize=8)
+        diff_path = save_path.parent / f'mean_diff_map_{tag}_ep{save_path.stem.split("ep")[-1]}.png'
+        plt.savefig(str(diff_path), dpi=150, bbox_inches='tight')
+        plt.close(fig_d)
+        print(f"Mean diff map saved → {diff_path}")
+
+    fig.suptitle(
+        'Counterfactual Acid Test — one row per image\n'
+        'Columns: Original → Reconstruction → Anatomy-only → Disease active → |Δ| where image changed',
+        fontsize=10, y=1.002,
+    )
     plt.savefig(str(save_path), dpi=140, bbox_inches='tight')
     plt.close(fig)
     print(f"Grid saved → {save_path}")
@@ -235,6 +380,7 @@ def run_counterfactual_eval(
     all_x_normal, all_x_cardio           = [], []
     all_mu_c_normal, all_mu_d_normal      = [], []
     all_mu_c_cardio, all_mu_d_cardio      = [], []
+    all_skip_normal, all_skip_cardio      = [], []
     all_bbox_cardio                        = []
     n_need = max(n_samples, n_inject_src)
     n_collected = 0
@@ -260,6 +406,12 @@ def run_counterfactual_eval(
         all_mu_c_cardio.append(np.array(ld_cardio["common"][0]))
         all_mu_d_cardio.append(np.array(ld_cardio["cardiomegaly"][0]))
         all_bbox_cardio.append(np.array(bbox_ca))
+        sf_n = ld_norm.get('skip_feats')
+        sf_c = ld_cardio.get('skip_feats')
+        if sf_n is not None:
+            all_skip_normal.append({k: np.array(v) for k, v in sf_n.items()})
+        if sf_c is not None:
+            all_skip_cardio.append({k: np.array(v) for k, v in sf_c.items()})
         n_collected += int(x_norm.shape[0])
 
     if n_collected == 0:
@@ -272,9 +424,14 @@ def run_counterfactual_eval(
     mu_c_cardio   = jnp.array(np.concatenate(all_mu_c_cardio,  axis=0))
     mu_d_cardio   = jnp.array(np.concatenate(all_mu_d_cardio,  axis=0))
     bboxes_cardio = jnp.array(np.concatenate(all_bbox_cardio,   axis=0))
+    skip_normal_all = _concat_skip_feats(all_skip_normal)
+    skip_cardio_all = _concat_skip_feats(all_skip_cardio)
 
     N_vis = min(n_samples, int(x_normal_all.shape[0]))
     n_src = min(n_inject_src, int(mu_d_cardio.shape[0]))
+
+    skip_n = _slice_skip(skip_normal_all, slice(N_vis))
+    skip_c = _slice_skip(skip_cardio_all, slice(N_vis))
 
     mean_z_cardio     = jnp.mean(mu_d_cardio[:n_src], axis=0, keepdims=True)
     injected_z_cardio = jnp.broadcast_to(mean_z_cardio, mu_d_normal[:N_vis].shape)
@@ -282,12 +439,12 @@ def run_counterfactual_eval(
     zeros_d_cardio    = jnp.zeros_like(mu_d_cardio[:N_vis])
     rotated_z_cardio  = jnp.roll(mu_d_cardio[:N_vis], shift=1, axis=0)
 
-    recon_normal    = decode_z(model, params, mu_c_normal[:N_vis], mu_d_normal[:N_vis])
-    recon_cardio    = decode_z(model, params, mu_c_cardio[:N_vis], mu_d_cardio[:N_vis])
-    anatomy_normal  = decode_z(model, params, mu_c_normal[:N_vis], zeros_d_normal)
-    anatomy_cardio  = decode_z(model, params, mu_c_cardio[:N_vis], zeros_d_cardio)
-    injected_normal = decode_z(model, params, mu_c_normal[:N_vis], injected_z_cardio)
-    injected_cardio = decode_z(model, params, mu_c_cardio[:N_vis], rotated_z_cardio)
+    recon_normal    = decode_z(model, params, mu_c_normal[:N_vis], mu_d_normal[:N_vis], skip_n)
+    recon_cardio    = decode_z(model, params, mu_c_cardio[:N_vis], mu_d_cardio[:N_vis], skip_c)
+    anatomy_normal  = decode_z(model, params, mu_c_normal[:N_vis], zeros_d_normal,      skip_n)
+    anatomy_cardio  = decode_z(model, params, mu_c_cardio[:N_vis], zeros_d_cardio,      skip_c)
+    injected_normal = decode_z(model, params, mu_c_normal[:N_vis], injected_z_cardio,   skip_n)
+    injected_cardio = decode_z(model, params, mu_c_cardio[:N_vis], rotated_z_cardio,    skip_c)
 
     grid_path = output_dir / f"counterfactual_grid_ep{epoch:04d}.png"
     save_counterfactual_grid(
@@ -334,8 +491,9 @@ def parse_args():
     p.add_argument("--z_disease",      type=int, default=16)
     p.add_argument("--attn_query_dim", type=int, default=256)
     p.add_argument("--attn_heads",     type=int, default=4)
-    p.add_argument("--bbox_query_mix", type=float, default=0.7)
-    p.add_argument("--seed",           type=int, default=0)
+    p.add_argument("--bbox_query_mix",      type=float, default=0.7)
+    p.add_argument("--decoder_res_blocks",  type=int,   default=3)
+    p.add_argument("--seed",                type=int,   default=0)
     return p.parse_args()
 
 
@@ -356,6 +514,7 @@ def main():
         attn_query_dim=args.attn_query_dim,
         attn_heads=args.attn_heads,
         bbox_query_mix=args.bbox_query_mix,
+        decoder_res_blocks=args.decoder_res_blocks,
     )
 
     # ── Dataset ───────────────────────────────────────────────────────────────
@@ -385,6 +544,7 @@ def main():
     all_x_normal, all_x_cardio     = [], []
     all_mu_c_normal, all_mu_d_normal = [], []
     all_mu_c_cardio, all_mu_d_cardio = [], []
+    all_skip_normal, all_skip_cardio  = [], []
     all_bbox_cardio                  = []
 
     print("Encoding dataset subset …")
@@ -407,6 +567,12 @@ def main():
         all_mu_c_cardio.append(np.array(ld_cardio['common'][0]))
         all_mu_d_cardio.append(np.array(ld_cardio['cardiomegaly'][0]))
         all_bbox_cardio.append(np.array(bbox_ca))
+        sf_n = ld_norm.get('skip_feats')
+        sf_c = ld_cardio.get('skip_feats')
+        if sf_n is not None:
+            all_skip_normal.append({k: np.array(v) for k, v in sf_n.items()})
+        if sf_c is not None:
+            all_skip_cardio.append({k: np.array(v) for k, v in sf_c.items()})
 
     x_normal_all   = jnp.array(np.concatenate(all_x_normal,    axis=0))
     x_cardio_all   = jnp.array(np.concatenate(all_x_cardio,    axis=0))
@@ -415,6 +581,8 @@ def main():
     mu_c_cardio    = jnp.array(np.concatenate(all_mu_c_cardio,  axis=0))
     mu_d_cardio    = jnp.array(np.concatenate(all_mu_d_cardio,  axis=0))
     bboxes_cardio  = jnp.array(np.concatenate(all_bbox_cardio,  axis=0))
+    skip_normal_all = _concat_skip_feats(all_skip_normal)
+    skip_cardio_all = _concat_skip_feats(all_skip_cardio)
 
     N_vis = min(args.n_samples, x_normal_all.shape[0])
 
@@ -425,26 +593,29 @@ def main():
     print(f"Mean z_cardio computed from {n_src} Cardiomegaly samples. "
           f"Norm: {float(jnp.linalg.norm(jnp.mean(mean_z_cardio, axis=(1, 2)))):.3f}")
 
+    skip_n = _slice_skip(skip_normal_all, slice(N_vis))
+    skip_c = _slice_skip(skip_cardio_all, slice(N_vis))
+
     # ── Test A: anatomy-only (z_cardio = 0) ───────────────────────────────────
     print("Running Test A (anatomy-only) …")
     zeros_d_normal = jnp.zeros_like(mu_d_normal[:N_vis])
     zeros_d_cardio = jnp.zeros_like(mu_d_cardio[:N_vis])
 
-    anatomy_normal = decode_z(model, params, mu_c_normal[:N_vis], zeros_d_normal)
-    anatomy_cardio = decode_z(model, params, mu_c_cardio[:N_vis], zeros_d_cardio)
+    anatomy_normal = decode_z(model, params, mu_c_normal[:N_vis], zeros_d_normal, skip_n)
+    anatomy_cardio = decode_z(model, params, mu_c_cardio[:N_vis], zeros_d_cardio, skip_c)
 
     # ── Test B: disease injection (inject mean z_cardio into Normal) ──────────
     print("Running Test B (disease injection) …")
     injected_z_cardio = jnp.broadcast_to(mean_z_cardio, mu_d_normal[:N_vis].shape)
 
-    injected_normal = decode_z(model, params, mu_c_normal[:N_vis], injected_z_cardio)
+    injected_normal = decode_z(model, params, mu_c_normal[:N_vis], injected_z_cardio, skip_n)
     # For Cardio: inject z_cardio from a different Cardio image (rotate by 1) as a sanity check
     rotated_z_cardio = jnp.roll(mu_d_cardio[:N_vis], shift=1, axis=0)
-    injected_cardio  = decode_z(model, params, mu_c_cardio[:N_vis], rotated_z_cardio)
+    injected_cardio  = decode_z(model, params, mu_c_cardio[:N_vis], rotated_z_cardio, skip_c)
 
     # Reconstruct originals for reference
-    recon_normal = decode_z(model, params, mu_c_normal[:N_vis], mu_d_normal[:N_vis])
-    recon_cardio = decode_z(model, params, mu_c_cardio[:N_vis], mu_d_cardio[:N_vis])
+    recon_normal = decode_z(model, params, mu_c_normal[:N_vis], mu_d_normal[:N_vis], skip_n)
+    recon_cardio = decode_z(model, params, mu_c_cardio[:N_vis], mu_d_cardio[:N_vis], skip_c)
 
     # ── Quantitative statistics ───────────────────────────────────────────────
     x_norm_01   = (x_normal_all[:N_vis] + 1.0) / 2.0

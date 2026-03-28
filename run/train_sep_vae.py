@@ -990,35 +990,73 @@ def main():
             print(f"  Partial warm-start: {len(new_keys)} new decoder key(s) init'd fresh → "
                   + ", ".join(sorted(new_keys)[:6]) + ("…" if len(new_keys) > 6 else ""))
 
-        # Optimizer state: restore if structure matches, otherwise start fresh.
-        try:
-            restored_vae_opt = from_state_dict(vae_state.opt_state, ckpt['vae_opt_state'])
-            vae_state = vae_state.replace(params=merged_params,
-                                          opt_state=restored_vae_opt,
-                                          step=int(ckpt['global_step']))
-            print("  VAE optimizer state: restored from checkpoint")
-        except (ValueError, KeyError) as _exc:
-            print(f"  VAE optimizer state mismatch ({_exc.__class__.__name__}: "
-                  f"{str(_exc)[:120]})")
-            print("  → Starting VAE optimizer fresh (params partially restored).")
+        # Optimizer state: restore only when ALL param shapes are unchanged.
+        # Adam mu/nu buffers must have identical shapes to params; if z_common grew
+        # (e.g. 16→32) then z_proj kernel changed (3,3,32,512)→(3,3,48,512) and
+        # restoring the old opt_state would cause a TypeError in the first gradient step.
+        _ckpt_vae_leaves  = jax.tree_util.tree_leaves(
+            jax.tree_util.tree_map(lambda x: jnp.array(x).shape, ckpt_vae_raw))
+        _fresh_vae_leaves = jax.tree_util.tree_leaves(
+            jax.tree_util.tree_map(lambda x: x.shape, merged_params))
+        _vae_shapes_ok = (_ckpt_vae_leaves == _fresh_vae_leaves)
+        if _vae_shapes_ok and 'vae_opt_state' in ckpt:
+            try:
+                restored_vae_opt = from_state_dict(vae_state.opt_state, ckpt['vae_opt_state'])
+                vae_state = vae_state.replace(params=merged_params,
+                                              opt_state=restored_vae_opt,
+                                              step=int(ckpt['global_step']))
+                print("  VAE optimizer state: restored from checkpoint")
+            except Exception as _exc:
+                print(f"  VAE optimizer state mismatch ({_exc.__class__.__name__}: "
+                      f"{str(_exc)[:120]})")
+                print("  → Starting VAE optimizer fresh (params partially restored).")
+                vae_state = vae_state.replace(params=merged_params)
+        else:
+            if not _vae_shapes_ok:
+                print("  [VAE restore] param shapes changed (e.g. z_common grew) → fresh optimizer state")
             vae_state = vae_state.replace(params=merged_params)
 
         if use_factor_disc and disc_state is not None and 'disc_params' in ckpt:
-            restored_disc_params = jax.tree_util.tree_map(jnp.array, ckpt['disc_params'])
-            try:
-                restored_disc_opt = from_state_dict(disc_state.opt_state, ckpt['disc_opt_state'])
-                disc_state = disc_state.replace(params=restored_disc_params,
-                                                opt_state=restored_disc_opt)
-            except (ValueError, KeyError):
+            # Use _merge_params so shape-changed params (e.g. disc_input_dim changed
+            # when z_common grows from 16→32) get fresh init instead of a shape crash.
+            restored_disc_params = _merge_params(disc_state.params, ckpt['disc_params'])
+            # Only restore opt_state when ALL param shapes are unchanged — opt_state
+            # (Adam mu/nu) must have the same shapes as params.  If any shape changed,
+            # keep the freshly-initialised opt_state (disc re-converges in ~200 steps).
+            _ckpt_disc_leaves  = jax.tree_util.tree_leaves(
+                jax.tree_util.tree_map(lambda x: jnp.array(x).shape, ckpt['disc_params']))
+            _fresh_disc_leaves = jax.tree_util.tree_leaves(
+                jax.tree_util.tree_map(lambda x: x.shape, restored_disc_params))
+            _disc_shapes_ok = (_ckpt_disc_leaves == _fresh_disc_leaves)
+            if _disc_shapes_ok and 'disc_opt_state' in ckpt:
+                try:
+                    restored_disc_opt = from_state_dict(disc_state.opt_state, ckpt['disc_opt_state'])
+                    disc_state = disc_state.replace(params=restored_disc_params,
+                                                    opt_state=restored_disc_opt)
+                except (ValueError, KeyError):
+                    disc_state = disc_state.replace(params=restored_disc_params)
+            else:
+                if not _disc_shapes_ok:
+                    print("  [disc restore] param shapes changed → fresh optimizer state")
                 disc_state = disc_state.replace(params=restored_disc_params)
         if use_patch_disc and patch_disc_state is not None and 'patch_disc_params' in ckpt:
-            restored_pd_params = jax.tree_util.tree_map(jnp.array, ckpt['patch_disc_params'])
-            try:
-                restored_pd_opt = from_state_dict(patch_disc_state.opt_state,
-                                                   ckpt['patch_disc_opt_state'])
-                patch_disc_state = patch_disc_state.replace(params=restored_pd_params,
-                                                             opt_state=restored_pd_opt)
-            except (ValueError, KeyError):
+            restored_pd_params = _merge_params(patch_disc_state.params, ckpt['patch_disc_params'])
+            _ckpt_pd_leaves  = jax.tree_util.tree_leaves(
+                jax.tree_util.tree_map(lambda x: jnp.array(x).shape, ckpt['patch_disc_params']))
+            _fresh_pd_leaves = jax.tree_util.tree_leaves(
+                jax.tree_util.tree_map(lambda x: x.shape, restored_pd_params))
+            _pd_shapes_ok = (_ckpt_pd_leaves == _fresh_pd_leaves)
+            if _pd_shapes_ok and 'patch_disc_opt_state' in ckpt:
+                try:
+                    restored_pd_opt = from_state_dict(patch_disc_state.opt_state,
+                                                       ckpt['patch_disc_opt_state'])
+                    patch_disc_state = patch_disc_state.replace(params=restored_pd_params,
+                                                                 opt_state=restored_pd_opt)
+                except (ValueError, KeyError):
+                    patch_disc_state = patch_disc_state.replace(params=restored_pd_params)
+            else:
+                if not _pd_shapes_ok:
+                    print("  [patch_disc restore] param shapes changed → fresh optimizer state")
                 patch_disc_state = patch_disc_state.replace(params=restored_pd_params)
         if vae_batch_stats and 'vae_batch_stats' in ckpt:
             vae_batch_stats = jax.tree_util.tree_map(jnp.array, ckpt['vae_batch_stats'])
