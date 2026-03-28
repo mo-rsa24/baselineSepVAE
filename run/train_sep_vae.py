@@ -239,132 +239,106 @@ def make_recon_grid(x_input, x_rec, labels, n_per_class=4):
     return Image.fromarray((grid.permute(1, 2, 0).numpy() * 255).astype(np.uint8))
 
 
-def make_attention_grid(x_input, attn_maps, labels, n_per_class=4,
-                        bboxes_cardio=None):
+def make_attention_grid(x_input, attn_maps, labels, x_rec=None,
+                        heart_masks=None, n_per_class=4, bboxes_cardio=None):
     """
-    Two-row panel (Normal / Cardiomegaly).
-    Each sample: 3 sub-columns — CXR | α-blended overlay | CXR+bbox+attn contour.
+    N×3 panel — one row per sample, three columns:
+      Col 0: GT CXR (grayscale)
+      Col 1: GT CXR + GT segmentation mask (CheXmask heart mask, cyan)
+      Col 2: Reconstruction + predicted segmentation mask (attention map, plasma)
 
-    Improvements vs original:
-      - 3 columns per sample instead of 2 (overlay + contour column)
-      - Global colorscale anchor: vmax = 99th-percentile of ALL attn values
-        → Normal row shows near-zero heat; Cardiomegaly row shows strong activation
-      - Row labels on y-axis of first column
-      - Per-sample caption: attn peak intensity + CTR proxy (blob width / img width)
+    Row ordering: Normal samples first, then Cardiomegaly.
+    N = n_normal + n_cardio (up to n_per_class each class).
+
+    When heart_masks is None (no CheXmask), col 1 falls back to plain GT CXR.
+    When x_rec is None, col 2 uses the input CXR instead of reconstruction.
+
+    Global colour anchor on attention ensures Normal row shows near-zero heat
+    and Cardiomegaly row shows strong activation.
     """
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
-    import matplotlib.patches as mpatches
+    import io
     from PIL import Image
 
-    x_01      = (np.array(x_input) + 1.0) / 2.0
-    attn_ca   = np.array(attn_maps['cardiomegaly'])   # (2B, H_lat, W_lat)
+    x_01      = (np.array(x_input) + 1.0) / 2.0          # (2B, H, W, 1) in [0,1]
+    attn_ca   = np.array(attn_maps['cardiomegaly'])        # (2B, H_lat, W_lat)
     labels_np = np.array(labels)
-    B         = x_01.shape[0] // 2
+    x_rec_np  = np.array(x_rec) if x_rec is not None else x_01  # already [0,1]
+    hm_np     = np.array(heart_masks) if heart_masks is not None else None
 
     # Global colour anchor — prevents normal row being artificially saturated
     global_vmax = float(np.percentile(attn_ca, 99)) if attn_ca.size > 0 else 1.0
     global_vmax = max(global_vmax, 1e-6)
 
-    def _draw_bbox(ax, bbox_norm, img_h, img_w, color='lime', lw=1.2):
-        if bbox_norm is None:
-            return
-        x0n, y0n, x1n, y1n = bbox_norm
-        if (x1n - x0n) < 1e-4:
-            return
-        rect = mpatches.Rectangle(
-            (x0n * img_w, y0n * img_h),
-            (x1n - x0n) * img_w, (y1n - y0n) * img_h,
-            linewidth=lw, edgecolor=color, facecolor='none',
-        )
-        ax.add_patch(rect)
+    # Collect sample indices: Normal first, Cardiomegaly second
+    norm_idxs = list(np.where(labels_np == 0)[0][:n_per_class])
+    card_idxs = list(np.where(labels_np == 1)[0][:n_per_class])
+    all_idxs  = norm_idxs + card_idxs
+    n_rows    = len(all_idxs)
+    if n_rows == 0:
+        # fallback: empty image
+        from PIL import Image as _PIL
+        return _PIL.new('RGB', (300, 100), color=(200, 200, 200))
 
-    def _ctr_proxy(attn_2d):
-        """Blob horizontal extent / image width as a simple CTR proxy."""
-        thresh = 0.30 * attn_2d.max() if attn_2d.max() > 0 else 0
-        mask   = attn_2d > thresh
-        cols   = np.where(mask.any(axis=0))[0]
-        if len(cols) < 2:
-            return 0.0
-        return float((cols[-1] - cols[0] + 1) / attn_2d.shape[1])
-
-    n_rows    = 2
-    n_subcols = 3   # CXR | overlay | contour
-    n_cols    = n_per_class * n_subcols
+    col_headers = ['GT CXR', 'GT CXR + GT mask', 'Recon + pred mask']
 
     fig, axes = plt.subplots(
-        n_rows, n_cols,
-        figsize=(n_per_class * n_subcols * 1.6, n_rows * 2.4),
+        n_rows, 3,
+        figsize=(3 * 3.2, n_rows * 2.6),
+        squeeze=False,
     )
-    if n_rows == 1: axes = axes[None, :]
-    if n_cols == 1: axes = axes[:, None]
 
-    class_names = ['Normal', 'Cardiomegaly']
-    col_headers = ['CXR', 'attn overlay', 'bbox + contour']
+    # Column header titles on first row only
+    for ci, header in enumerate(col_headers):
+        axes[0, ci].set_title(header, fontsize=8, pad=3)
 
-    for row, cls_id in enumerate([0, 1]):
-        idxs = np.where(labels_np == cls_id)[0][:n_per_class]
+    for row_i, idx in enumerate(all_idxs):
+        img_in   = x_01[idx, :, :, 0]      # (H, W) in [0,1]
+        img_out  = x_rec_np[idx, :, :, 0]  # (H, W) in [0,1]
+        H, W     = img_in.shape
+        attn_raw = attn_ca[idx]             # (H_lat, W_lat)
+        label_str = 'Normal' if idx in norm_idxs else 'Cardio'
 
-        for col_pos, idx in enumerate(idxs):
-            img      = x_01[idx, :, :, 0]        # (H, W) in [0,1]
-            H, W     = img.shape
-            base     = col_pos * n_subcols
-            # Within-class index (used for bbox lookup in cardio)
-            within_cls = int(idx - B) if cls_id == 1 else None
+        # Upsample attention to full image resolution
+        attn_up = np.array(
+            jax.image.resize(attn_raw[..., None], (H, W, 1), method='bilinear')[:, :, 0]
+        )
+        # Locally normalise for display (globally anchored)
+        attn_disp = np.clip(attn_up / global_vmax, 0.0, 1.0)
 
-            # Upsample attention to full image resolution (jax bilinear, no scipy)
-            attn_raw = attn_ca[idx]               # (H_lat, W_lat)
-            attn_up  = np.array(
-                jax.image.resize(attn_raw[..., None], (H, W, 1), method='linear')[:, :, 0]
+        # Col 0: GT CXR
+        axes[row_i, 0].imshow(img_in, cmap='gray', vmin=0, vmax=1,
+                               interpolation='lanczos')
+        axes[row_i, 0].set_ylabel(label_str, fontsize=7, labelpad=3)
+        axes[row_i, 0].axis('off')
+
+        # Col 1: GT CXR + GT segmentation mask
+        axes[row_i, 1].imshow(img_in, cmap='gray', vmin=0, vmax=1,
+                               interpolation='lanczos')
+        if hm_np is not None:
+            hm = hm_np[idx].astype(np.float32)   # (S, S)
+            hm_up = np.array(
+                jax.image.resize(hm[..., None], (H, W, 1), method='nearest')[:, :, 0]
             )
+            rgba = np.zeros((H, W, 4), dtype=np.float32)
+            rgba[hm_up > 0.5] = [0.0, 0.9, 0.9, 0.45]  # cyan fill
+            axes[row_i, 1].imshow(rgba, extent=(0, W, H, 0))
+            axes[row_i, 1].contour(hm_up, levels=[0.5], colors=['cyan'],
+                                   linewidths=[1.0], extent=(0, W, 0, H))
+        axes[row_i, 1].axis('off')
 
-            peak     = float(attn_raw.max())
-            ctr      = _ctr_proxy(attn_raw)
-
-            # Sub-col 0: plain CXR
-            ax = axes[row, base]
-            ax.imshow(img, cmap='gray', vmin=0, vmax=1)
-            ax.axis('off')
-            if col_pos == 0:
-                ax.set_ylabel(class_names[cls_id], fontsize=8, labelpad=4)
-            if row == 0:
-                ax.set_title(col_headers[0], fontsize=7)
-            ax.set_xlabel(f'peak={peak:.2f}\nCTR≈{ctr:.2f}', fontsize=5.5, labelpad=2)
-
-            # Sub-col 1: α-blended overlay (globally anchored)
-            ax = axes[row, base + 1]
-            ax.imshow(img, cmap='gray', vmin=0, vmax=1)
-            ax.imshow(attn_up, cmap='hot', alpha=0.55,
-                      vmin=0, vmax=global_vmax,
-                      extent=(0, W, H, 0), interpolation='bilinear')
-            ax.axis('off')
-            if row == 0 and col_pos == 0:
-                ax.set_title(col_headers[1], fontsize=7)
-
-            # Sub-col 2: contour + GT bbox
-            ax = axes[row, base + 2]
-            ax.imshow(img, cmap='gray', vmin=0, vmax=1)
-            # Attn contour at 30 % of global max
-            contour_thresh = 0.30 * global_vmax
-            if attn_up.max() > contour_thresh:
-                ax.contour(attn_up, levels=[contour_thresh],
-                           colors=['orangered'], linewidths=[1.0],
-                           extent=(0, W, 0, H))
-            if cls_id == 1 and within_cls is not None and bboxes_cardio is not None:
-                if 0 <= within_cls < len(bboxes_cardio):
-                    _draw_bbox(ax, bboxes_cardio[within_cls], H, W, color='lime')
-            ax.axis('off')
-            if row == 0 and col_pos == 0:
-                ax.set_title(col_headers[2], fontsize=7)
-
-        # Blank out unused columns
-        for col_pos in range(len(idxs), n_per_class):
-            for sub in range(n_subcols):
-                axes[row, col_pos * n_subcols + sub].axis('off')
+        # Col 2: Reconstruction + predicted segmentation mask (attention)
+        axes[row_i, 2].imshow(img_out, cmap='gray', vmin=0, vmax=1,
+                               interpolation='lanczos')
+        axes[row_i, 2].imshow(attn_disp, cmap='plasma', alpha=0.45,
+                               vmin=0, vmax=1,
+                               extent=(0, W, H, 0), interpolation='bilinear')
+        axes[row_i, 2].axis('off')
 
     plt.tight_layout(pad=0.3)
-    buf = __import__('io').BytesIO()
+    buf = io.BytesIO()
     plt.savefig(buf, format='png', dpi=130, bbox_inches='tight')
     plt.close(fig)
     buf.seek(0)
@@ -1230,7 +1204,8 @@ def main():
         return vae_state_arg.apply_gradients(grads=grads), logs, z_c, z_ca, x_rec
 
     @jax.jit
-    def reconstruct_and_encode(vae_params_arg, x, labels, key, bbox_full, has_bbox):
+    def reconstruct_and_encode(vae_params_arg, x, labels, key, bbox_full, has_bbox,
+                                heart_mask=None):
         """Full forward pass for visualisation."""
         variables = {'params': vae_params_arg}
         if _batch_stats_arg is not None:
@@ -1239,10 +1214,12 @@ def main():
             x_rec, latents_dict, _, _, _ = sepvae.apply(
                 variables, x, labels, key=key, train=False,
                 bbox=bbox_full, has_bbox=has_bbox,
+                heart_mask=heart_mask,
             )
         else:
             x_rec, latents_dict, _, _, _ = sepvae.apply(
                 variables, x, labels, key=key, train=False,
+                heart_mask=heart_mask,
             )
         return x_rec, latents_dict['attn_maps']
 
@@ -1422,6 +1399,7 @@ def main():
             x_rec, attn_maps = reconstruct_and_encode(
                 vis_params, x_full, labels_v, vis_key,
                 last_batch['bbox_full'], last_batch['has_bbox'],
+                heart_mask=last_batch.get('heart_mask'),
             )
 
             grid_path = samples_dir / f"recon_epoch{epoch:04d}.png"
@@ -1434,6 +1412,9 @@ def main():
                 np.array(x_full),
                 {k: np.array(v) for k, v in attn_maps.items()},
                 np.array(labels_v),
+                x_rec=np.array(x_rec),
+                heart_masks=np.array(last_batch['heart_mask'])
+                            if 'heart_mask' in last_batch else None,
                 n_per_class=args.n_samples_per_class,
                 bboxes_cardio=np.array(last_batch['bbox_disease1']),
             ).save(str(attn_path))
@@ -1481,36 +1462,38 @@ def main():
                                  for k, v in manifold_metrics.items() if np.isfinite(v)})
                 wandb.log(payload, step=global_step)
 
-            # ── KL heatmap (2-class) ─────────────────────────────────────────
-            if last_batch is not None:
-                try:
-                    kl_img  = _make_kl_heatmap(
-                        sepvae, manifold_params,
-                        last_batch['x_norm'], last_batch['x_disease1'],
-                    )
-                    kl_path = diag_dir / f"kl_heatmap_epoch{epoch:04d}.png"
-                    kl_img.save(str(kl_path))
-                    if args.wandb and _WANDB:
-                        wandb.log({"diagnostics/kl_heatmap": wandb.Image(str(kl_path))},
-                                  step=global_step)
-                    print(f"  Saved KL heatmap: {kl_path}")
-                except Exception as _e:
-                    print(f"  [warn] KL heatmap failed: {_e}")
+            # ── KL heatmap (2-class) — disabled: mask curriculum ─────────────
+            if False:  # disabled: mask curriculum uses ctr_reg instead
+                if last_batch is not None:
+                    try:
+                        kl_img  = _make_kl_heatmap(
+                            sepvae, manifold_params,
+                            last_batch['x_norm'], last_batch['x_disease1'],
+                        )
+                        kl_path = diag_dir / f"kl_heatmap_epoch{epoch:04d}.png"
+                        kl_img.save(str(kl_path))
+                        if args.wandb and _WANDB:
+                            wandb.log({"diagnostics/kl_heatmap": wandb.Image(str(kl_path))},
+                                      step=global_step)
+                        print(f"  Saved KL heatmap: {kl_path}")
+                    except Exception as _e:
+                        print(f"  [warn] KL heatmap failed: {_e}")
 
-            # ── Counterfactual acid test ──────────────────────────────────────
-            if _DIAG and _run_counterfactual_eval is not None:
-                try:
-                    _run_counterfactual_eval(
-                        sepvae, manifold_params, vae_batch_stats,
-                        eval_loader,
-                        output_dir=diag_dir,
-                        epoch=epoch,
-                        global_step=global_step,
-                        n_samples=min(8, args.eval_subset_size),
-                        use_wandb=(args.wandb and _WANDB),
-                    )
-                except Exception as _e:
-                    print(f"  [warn] counterfactual eval failed: {_e}")
+            # ── Counterfactual acid test — disabled: mask curriculum ──────────
+            if False:  # disabled: no bbox injection in mask curriculum
+                if _DIAG and _run_counterfactual_eval is not None:
+                    try:
+                        _run_counterfactual_eval(
+                            sepvae, manifold_params, vae_batch_stats,
+                            eval_loader,
+                            output_dir=diag_dir,
+                            epoch=epoch,
+                            global_step=global_step,
+                            n_samples=min(8, args.eval_subset_size),
+                            use_wandb=(args.wandb and _WANDB),
+                        )
+                    except Exception as _e:
+                        print(f"  [warn] counterfactual eval failed: {_e}")
 
             # ── 8-panel research claim scaffolding ───────────────────────────
             if _DIAG and _run_scaffolding is not None:
@@ -1523,6 +1506,7 @@ def main():
                         output_dir=diag_dir,
                         use_wandb=(args.wandb and _WANDB),
                         use_bbox_cross_attn=args.use_bbox_cross_attn,
+                        has_chexmask=getattr(args, 'chexmask_csv', None) is not None,
                     )
                 except Exception as _e:
                     print(f"  [warn] scaffolding failed: {_e}")

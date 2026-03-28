@@ -1,5 +1,5 @@
 """
-8-panel visual scaffolding for the research claim.
+7-panel visual scaffolding for the mask supervision research claim.
 
 Builds a single wide composite strip that reads left-to-right as a
 self-contained proof of disentanglement, without requiring the reader
@@ -8,24 +8,28 @@ to understand silhouette scores or latent geometry.
 Panel layout (left → right):
   00  Real cardiomegaly CXR
   01  Same + GT bbox (green)
-  02  Same + attention heatmap α-blended
-  03  Reconstruction  (z_common, z_disease)
+  02  Same + GT segmentation mask (CheXmask heart, cyan)
+  03  Reconstruction  (z_common + z_disease)
   04  Anatomy-only    (z_common, z_disease=0)
-  05  Pixel diff ×5   |panel03 − panel04|  (RdBu colourmap)
-  06  2D PCA scatter  (eval set; highlighted point = the selected image)
-  07  Bar chart: ||z_disease|| mean — Normal vs Cardiomegaly (from eval set)
+  05  Reconstruction + predicted mask (attention map overlay, plasma)
+  06  Pixel diff ×5   |panel03 − panel04|  (hot colourmap)
+
+Predicted mask source: BboxCrossAttnHead attention map (16×16), bilinear-
+upsampled to image resolution.  In the mask curriculum the attention head
+is trained to match the CheXmask binary prior, so at inference time it
+functions as a predicted cardiac segmentation map.
 
 Exported function (called from train_sep_vae.py every manifold_every epochs):
     run_scaffolding(model, params, batch_stats, eval_loader,
                     epoch, global_step, output_dir,
-                    use_wandb=False, use_bbox_cross_attn=True) → Path or None
+                    use_wandb=False, use_bbox_cross_attn=True,
+                    has_chexmask=False) → Path or None
 
 Logged to W&B as "diagnostics/scaffolding".
 """
 
 from __future__ import annotations
 
-import io
 from pathlib import Path
 
 import jax
@@ -36,76 +40,37 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from PIL import Image
-from sklearn.decomposition import PCA
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
 def _prep_img(arr):
-    """(H, W, 1) JAX/numpy in [0,1] → (H, W) float32 numpy."""
-    return np.clip(np.array(arr[:, :, 0], dtype=np.float32), 0.0, 1.0)
+    """(H, W, 1) or (H, W) JAX/numpy in [0,1] → (H, W) float32 numpy."""
+    a = np.array(arr, dtype=np.float32)
+    if a.ndim == 3:
+        a = a[:, :, 0]
+    return np.clip(a, 0.0, 1.0)
 
 
-def _encode_batch(model, params, x, bbox=None, has_bbox=None):
+def _encode_batch(model, params, x, bbox=None, has_bbox=None, heart_mask=None):
     variables = {"params": params}
     kwargs = {}
     if bbox is not None:
         kwargs["bbox"]     = bbox
         kwargs["has_bbox"] = has_bbox
+    if heart_mask is not None:
+        kwargs["heart_mask"] = heart_mask
     return model.apply(variables, x, method=model.encode, **kwargs)
 
 
-def _decode_z(model, params, z_common, z_disease):
+def _decode_z(model, params, z_common, z_disease, skip_feats=None, heart_mask=None):
     z = jnp.concatenate([z_common, z_disease], axis=-1)
-    return model.apply({"params": params}, z, method=model.decode)
-
-
-def _collect_eval_latents(model, params, eval_loader, max_samples=300,
-                           use_bbox_cross_attn=True):
-    """
-    Encode a subset of the eval set.
-
-    Returns dicts:
-        mu_common  (N, D_c)  — spatially-pooled z_common means
-        mu_disease (N, D_d)  — spatially-pooled z_disease means
-        labels     (N,)      — 0=Normal, 1=Cardiomegaly
-    """
-    all_mu_c, all_mu_d, all_labels = [], [], []
-    n = 0
-    for batch in eval_loader:
-        if n >= max_samples:
-            break
-        x_norm   = jnp.array(batch["x_norm"].permute(0, 2, 3, 1).numpy())
-        x_cardio = jnp.array(batch["x_disease1"].permute(0, 2, 3, 1).numpy())
-        B = x_norm.shape[0]
-
-        bbox_ca  = jnp.array(batch["bbox_disease1"].numpy())
-        has_ca   = ((bbox_ca[:, 2] - bbox_ca[:, 0]) > 1e-4).astype(jnp.float32)
-        bbox_z   = jnp.zeros_like(bbox_ca)
-        has_z    = jnp.zeros(B, dtype=jnp.float32)
-
-        for x, bbox, has_bbox, lbl in [
-            (x_norm,   bbox_z, has_z,  0),
-            (x_cardio, bbox_ca, has_ca, 1),
-        ]:
-            if use_bbox_cross_attn:
-                ld = _encode_batch(model, params, x, bbox=bbox, has_bbox=has_bbox)
-            else:
-                ld = _encode_batch(model, params, x)
-            mu_c = np.array(jnp.mean(ld["common"][0],       axis=(1, 2)))  # (B, C)
-            mu_d = np.array(jnp.mean(ld["cardiomegaly"][0], axis=(1, 2)))  # (B, C)
-            all_mu_c.append(mu_c)
-            all_mu_d.append(mu_d)
-            all_labels.append(np.full(B, lbl, dtype=np.int32))
-        n += B
-
-    if not all_mu_c:
-        return None
-    return {
-        "mu_common":  np.concatenate(all_mu_c,   axis=0),
-        "mu_disease": np.concatenate(all_mu_d,   axis=0),
-        "labels":     np.concatenate(all_labels, axis=0),
-    }
+    kwargs = {}
+    if skip_feats is not None:
+        kwargs["skip_feats"] = skip_feats
+    if heart_mask is not None:
+        kwargs["heart_mask"] = heart_mask
+    return model.apply({"params": params}, z, method=model.decode, **kwargs)
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -120,12 +85,14 @@ def run_scaffolding(
     output_dir,
     use_wandb: bool = False,
     use_bbox_cross_attn: bool = True,
+    has_chexmask: bool = False,
 ) -> Path | None:
     """
-    Build the 8-panel scaffolding strip and save it.
+    Build the 7-panel scaffolding strip and save it.
 
     Picks the first Cardiomegaly image from the eval loader as the
-    representative case (the one with the largest GT bbox area).
+    representative case.  When has_chexmask=True, selects the image with
+    the largest GT heart mask area; otherwise falls back to largest bbox area.
 
     Returns the path to the saved PNG, or None on failure.
     """
@@ -133,151 +100,106 @@ def run_scaffolding(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # ── 1. Get a representative Cardiomegaly image ────────────────────────────
-    best_batch = None
-    best_bbox_area = -1.0
-    best_idx = 0
-    n_scanned = 0
+    best_batch      = None
+    best_score      = -1.0
+    best_idx        = 0
+    n_scanned       = 0
 
     for batch in eval_loader:
-        bbox_ca = batch["bbox_disease1"].numpy()          # (B, 4) normalised
-        areas   = (bbox_ca[:, 2] - bbox_ca[:, 0]) * (bbox_ca[:, 3] - bbox_ca[:, 1])
-        if areas.max() > best_bbox_area:
-            best_bbox_area = float(areas.max())
-            best_batch     = batch
-            best_idx       = int(np.argmax(areas))
+        if has_chexmask and 'heart_mask' in batch:
+            # Prefer largest GT heart mask area (cardiomegaly half of batch)
+            hm     = batch['heart_mask'].numpy()    # (B, S, S) — cardio half
+            # heart_mask tensor is (2B, S, S): second half = cardio
+            B_half = hm.shape[0] // 2
+            hm_ca  = hm[B_half:]                    # (B, S, S) cardio samples
+            scores = hm_ca.reshape(B_half, -1).sum(axis=1)
+        else:
+            bbox_ca = batch["bbox_disease1"].numpy()
+            scores  = (bbox_ca[:, 2] - bbox_ca[:, 0]) * (bbox_ca[:, 3] - bbox_ca[:, 1])
+
+        if scores.max() > best_score:
+            best_score = float(scores.max())
+            best_batch = batch
+            best_idx   = int(np.argmax(scores))
         n_scanned += 1
-        if n_scanned >= 8:   # scan first 8 batches, pick the most prominent case
+        if n_scanned >= 8:
             break
 
     if best_batch is None:
         return None
 
-    # Extract representative images (single sample)
+    # ── 2. Extract single representative sample ───────────────────────────────
     x_cardio_np = best_batch["x_disease1"][best_idx].permute(1, 2, 0).numpy()  # (H,W,1)
-    x_norm_np   = best_batch["x_norm"][best_idx].permute(1, 2, 0).numpy()
     bbox_np     = best_batch["bbox_disease1"][best_idx].numpy()                  # (4,)
 
     x_cardio_jax = jnp.array(x_cardio_np)[None]  # (1,H,W,1)  in [-1,1]
-    x_norm_jax   = jnp.array(x_norm_np)[None]
-
     bbox_ca_jax  = jnp.array(bbox_np)[None]       # (1,4)
     has_bbox_jax = jnp.array([float((bbox_np[2] - bbox_np[0]) > 1e-4)])
-    bbox_z       = jnp.zeros_like(bbox_ca_jax)
-    has_z        = jnp.zeros(1, dtype=jnp.float32)
 
-    # ── 2. Encode cardiomegaly image ──────────────────────────────────────────
+    # CheXmask heart mask for this sample (cardio half of 2B tensor)
+    heart_mask_sel = None
+    heart_mask_jax = None
+    if has_chexmask and 'heart_mask' in best_batch:
+        hm_full   = best_batch['heart_mask'].numpy()   # (2B, S, S)
+        B_half    = hm_full.shape[0] // 2
+        heart_mask_sel = hm_full[B_half + best_idx]   # (S, S)  cardio sample
+        heart_mask_jax = jnp.array(heart_mask_sel)[None]  # (1, S, S)
+
+    # ── 3. Encode cardiomegaly image ──────────────────────────────────────────
     if use_bbox_cross_attn:
-        ld_cardio = _encode_batch(model, params, x_cardio_jax,
-                                   bbox=bbox_ca_jax, has_bbox=has_bbox_jax)
+        ld_cardio = _encode_batch(
+            model, params, x_cardio_jax,
+            bbox=bbox_ca_jax, has_bbox=has_bbox_jax,
+            heart_mask=heart_mask_jax,
+        )
     else:
-        ld_cardio = _encode_batch(model, params, x_cardio_jax)
+        ld_cardio = _encode_batch(model, params, x_cardio_jax,
+                                   heart_mask=heart_mask_jax)
 
     mu_c  = ld_cardio["common"][0]       # (1, H_lat, W_lat, C_c)
     mu_d  = ld_cardio["cardiomegaly"][0] # (1, H_lat, W_lat, C_d)
     attn  = np.array(ld_cardio["attn_maps"]["cardiomegaly"][0])  # (H_lat, W_lat)
+    skip_feats = ld_cardio.get("skip_feats")
 
-    # ── 3. Reconstruct: full and anatomy-only ────────────────────────────────
-    recon_full     = _decode_z(model, params, mu_c, mu_d)          # (1,H,W,1) in [0,1]
-    recon_anatomy  = _decode_z(model, params, mu_c, jnp.zeros_like(mu_d))
+    # ── 4. Reconstruct: full and anatomy-only ────────────────────────────────
+    recon_full    = _decode_z(model, params, mu_c, mu_d,
+                              skip_feats=skip_feats, heart_mask=heart_mask_jax)
+    recon_anatomy = _decode_z(model, params, mu_c, jnp.zeros_like(mu_d),
+                              skip_feats=skip_feats, heart_mask=heart_mask_jax)
 
-    img_orig     = _prep_img(((x_cardio_np + 1.0) / 2.0))     # (H,W) in [0,1]
-    img_recon    = _prep_img(np.array(recon_full[0]))
-    img_anatomy  = _prep_img(np.array(recon_anatomy[0]))
-    img_diff     = np.clip(np.abs(img_recon - img_anatomy) * 5.0, 0.0, 1.0)
+    img_orig    = _prep_img((x_cardio_np + 1.0) / 2.0)
+    img_recon   = _prep_img(np.array(recon_full[0]))
+    img_anatomy = _prep_img(np.array(recon_anatomy[0]))
+    img_diff    = np.clip(np.abs(img_recon - img_anatomy) * 5.0, 0.0, 1.0)
 
     H, W = img_orig.shape
 
-    # ── 4. Collect eval latents for PCA scatter (panel 06) ───────────────────
-    latent_data = _collect_eval_latents(
-        model, params, eval_loader,
-        max_samples=300,
-        use_bbox_cross_attn=use_bbox_cross_attn,
+    # ── 5. Upsample attention map to image size (predicted mask) ─────────────
+    attn_up = np.array(
+        jax.image.resize(attn[..., None], (H, W, 1), method="bilinear")[:, :, 0]
     )
+    attn_up = (attn_up - attn_up.min()) / (attn_up.max() - attn_up.min() + 1e-8)
 
-    # ── 5. Build PCA scatter (panel 06) ──────────────────────────────────────
-    # z_disease head only — that's the axis of interest
-    pca_fig, pca_ax = plt.subplots(figsize=(2.8, 2.8))
-    if latent_data is not None:
-        mu_d_all = latent_data["mu_disease"]
-        lbl_all  = latent_data["labels"]
-        pca = PCA(n_components=2)
-        z2d = pca.fit_transform(mu_d_all)
-
-        for cls_id, cls_name, color in [(0, "Normal", "#1f77b4"), (1, "Cardio", "#2ca02c")]:
-            mask = lbl_all == cls_id
-            pca_ax.scatter(z2d[mask, 0], z2d[mask, 1],
-                           c=color, s=6, alpha=0.4, label=cls_name, rasterized=True)
-
-        # Highlight the selected cardiomegaly image
-        mu_d_sel = np.array(jnp.mean(mu_d, axis=(1, 2)))  # (1, C)
-        z_sel    = pca.transform(mu_d_sel)
-        pca_ax.scatter(z_sel[0, 0], z_sel[0, 1],
-                       c="red", s=80, marker="*", zorder=10, label="this image")
-    else:
-        pca_ax.text(0.5, 0.5, "insufficient data", ha="center", va="center",
-                    transform=pca_ax.transAxes, fontsize=8, color="gray")
-
-    pca_ax.set_title("z_disease PCA", fontsize=8)
-    pca_ax.legend(fontsize=6, loc="best", markerscale=2)
-    pca_ax.tick_params(labelsize=6)
-    pca_ax.spines["top"].set_visible(False)
-    pca_ax.spines["right"].set_visible(False)
-    pca_buf = io.BytesIO()
-    pca_fig.savefig(pca_buf, format="png", dpi=120, bbox_inches="tight")
-    plt.close(pca_fig)
-    pca_buf.seek(0)
-    pca_panel = np.array(Image.open(pca_buf).convert("RGB"), dtype=np.float32) / 255.0
-
-    # ── 6. Build bar chart (panel 07) — ||z_disease|| Normal vs Cardiomegaly ──
-    bar_fig, bar_ax = plt.subplots(figsize=(2.8, 2.8))
-    if latent_data is not None:
-        mu_d_all = latent_data["mu_disease"]
-        lbl_all  = latent_data["labels"]
-        norms_n  = np.linalg.norm(mu_d_all[lbl_all == 0], axis=1)
-        norms_c  = np.linalg.norm(mu_d_all[lbl_all == 1], axis=1)
-        means    = [norms_n.mean(), norms_c.mean()]
-        sems     = [norms_n.std() / max(np.sqrt(len(norms_n)), 1),
-                    norms_c.std() / max(np.sqrt(len(norms_c)), 1)]
-        bar_ax.bar(["Normal", "Cardio"], means, yerr=sems,
-                   color=["#1f77b4", "#2ca02c"], capsize=5, alpha=0.82,
-                   error_kw={"linewidth": 1.2, "ecolor": "grey"})
-        bar_ax.set_ylabel("mean ‖z_disease‖₂", fontsize=8)
-    else:
-        bar_ax.text(0.5, 0.5, "insufficient data", ha="center", va="center",
-                    transform=bar_ax.transAxes, fontsize=8, color="gray")
-
-    bar_ax.set_title("Disease latent norm", fontsize=8)
-    bar_ax.tick_params(labelsize=7)
-    bar_ax.spines["top"].set_visible(False)
-    bar_ax.spines["right"].set_visible(False)
-    bar_buf = io.BytesIO()
-    bar_fig.savefig(bar_buf, format="png", dpi=120, bbox_inches="tight")
-    plt.close(bar_fig)
-    bar_buf.seek(0)
-    bar_panel = np.array(Image.open(bar_buf).convert("RGB"), dtype=np.float32) / 255.0
-
-    # ── 7. Compose the 8-panel strip ─────────────────────────────────────────
+    # ── 6. Compose the 7-panel strip ─────────────────────────────────────────
     CAPTIONS = [
         "00  Real CXR\n(cardiomegaly)",
         "01  + GT bbox",
-        "02  + attn overlay",
+        "02  + GT seg mask\n(CheXmask)",
         "03  Reconstruction\n(z_c + z_d)",
         "04  Anatomy-only\n(z_d = 0)",
-        "05  Diff ×5\n|03 − 04|",
-        "06  z_disease PCA\n(red★ = this image)",
-        "07  ‖z_disease‖₂\nvs class",
+        "05  Recon +\npred mask (attn)",
+        "06  Diff ×5\n|03 − 04|",
     ]
 
-    n_panels   = 8
-    cell_px    = 3.0        # inches per CXR panel
-    extra_px   = 0.35       # caption height in inches
-    fig_w      = n_panels * cell_px
-    fig_h      = cell_px + extra_px
-    fig, axes  = plt.subplots(1, n_panels,
-                               figsize=(fig_w, fig_h),
-                               gridspec_kw={"wspace": 0.05})
+    n_panels  = 7
+    cell_px   = 3.0
+    extra_px  = 0.35
+    fig_w     = n_panels * cell_px
+    fig_h     = cell_px + extra_px
+    fig, axes = plt.subplots(1, n_panels,
+                              figsize=(fig_w, fig_h),
+                              gridspec_kw={"wspace": 0.05})
 
-    # Panels 00-05: grayscale / diff images
     def _show_cxr(ax, img_2d, cmap="gray", vmin=0, vmax=1):
         ax.imshow(img_2d, cmap=cmap, vmin=vmin, vmax=vmax, interpolation="lanczos")
         ax.set_xticks([]); ax.set_yticks([])
@@ -299,15 +221,24 @@ def run_scaffolding(
     axes[1].set_xticks([]); axes[1].set_yticks([])
     for sp in axes[1].spines.values(): sp.set_visible(False)
 
-    # 02: CXR + attention overlay
-    # Upsample attn map to image size
-    attn_up = np.array(
-        jax.image.resize(attn[..., None], (H, W, 1), method="bilinear")[:, :, 0]
-    )
-    attn_up = (attn_up - attn_up.min()) / (attn_up.max() - attn_up.min() + 1e-8)
+    # 02: CXR + GT segmentation mask (CheXmask)
     axes[2].imshow(img_orig, cmap="gray", vmin=0, vmax=1, interpolation="lanczos")
-    axes[2].imshow(attn_up, cmap="hot", alpha=0.55,
-                   extent=(0, W, H, 0), interpolation="bilinear")
+    if heart_mask_sel is not None:
+        mask_up = np.array(
+            jax.image.resize(
+                heart_mask_sel[..., None].astype(np.float32),
+                (H, W, 1), method="nearest"
+            )[:, :, 0]
+        )
+        rgba = np.zeros((H, W, 4), dtype=np.float32)
+        rgba[mask_up > 0.5] = [0.0, 0.9, 0.9, 0.5]  # cyan
+        axes[2].imshow(rgba, extent=(0, W, H, 0))
+        axes[2].contour(mask_up, levels=[0.5], colors=["cyan"],
+                        linewidths=[1.2], extent=(0, W, 0, H))
+    else:
+        axes[2].text(0.5, 0.5, "no mask", ha="center", va="center",
+                     transform=axes[2].transAxes, fontsize=8, color="gray",
+                     style="italic")
     axes[2].set_xticks([]); axes[2].set_yticks([])
     for sp in axes[2].spines.values(): sp.set_visible(False)
 
@@ -317,18 +248,15 @@ def run_scaffolding(
     # 04: anatomy-only
     _show_cxr(axes[4], img_anatomy)
 
-    # 05: amplified diff (RdBu: blue=0, white=small, red=large)
-    _show_cxr(axes[5], img_diff, cmap="hot", vmin=0, vmax=1)
+    # 05: reconstruction + predicted mask (attention heatmap)
+    axes[5].imshow(img_recon, cmap="gray", vmin=0, vmax=1, interpolation="lanczos")
+    axes[5].imshow(attn_up, cmap="plasma", alpha=0.50,
+                   vmin=0, vmax=1, extent=(0, W, H, 0), interpolation="bilinear")
+    axes[5].set_xticks([]); axes[5].set_yticks([])
+    for sp in axes[5].spines.values(): sp.set_visible(False)
 
-    # 06: PCA scatter (pre-rendered as RGB image)
-    axes[6].imshow(pca_panel, aspect="auto")
-    axes[6].set_xticks([]); axes[6].set_yticks([])
-    for sp in axes[6].spines.values(): sp.set_visible(False)
-
-    # 07: bar chart (pre-rendered)
-    axes[7].imshow(bar_panel, aspect="auto")
-    axes[7].set_xticks([]); axes[7].set_yticks([])
-    for sp in axes[7].spines.values(): sp.set_visible(False)
+    # 06: amplified diff
+    _show_cxr(axes[6], img_diff, cmap="hot", vmin=0, vmax=1)
 
     # Captions below each panel
     for ax, cap in zip(axes, CAPTIONS):
@@ -337,7 +265,7 @@ def run_scaffolding(
     fig.suptitle(
         f"Research claim scaffold — Epoch {epoch}  "
         f"(step {global_step:,})\n"
-        "Left→right: real CXR → bbox → attn → recon → anatomy-only → diff → latent PCA → norm",
+        "Left→right: real CXR → bbox → GT seg → recon → anatomy-only → recon+pred mask → diff",
         fontsize=8, y=1.02,
     )
 
