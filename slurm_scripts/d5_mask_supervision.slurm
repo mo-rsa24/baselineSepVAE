@@ -30,7 +30,7 @@
 #SBATCH --job-name=sepvae-d5-mask
 #SBATCH --nodelist=mscluster107
 #SBATCH --partition=biggpu
-#SBATCH --time=48:00:00
+#SBATCH --time=72:00:00
 #SBATCH --ntasks=1
 #SBATCH --output=logs/sepvae-d5-mask-%j.out
 #SBATCH --error=logs/sepvae-d5-mask-%j.err
