@@ -699,7 +699,7 @@ class SepVAEDecoderV2(nn.Module):
     se_reduction:   int           = 8
 
     @nn.compact
-    def __call__(self, z, skip_feats=None, train: bool = True):
+    def __call__(self, z, skip_feats=None, heart_mask=None, train: bool = True):
         h = nn.Conv(self.ch_mults[-1], (3, 3), padding='SAME', name='z_proj')(z)
 
         for i in reversed(range(len(self.ch_mults))):
@@ -709,10 +709,24 @@ class SepVAEDecoderV2(nn.Module):
             # Concat + 1×1 conv (no bias) preserves skip signal while adapting channels.
             # Injection before ResBlockSE lets those blocks process the fused features.
             # Spatial scales: i=4 → 16×16 (layer3, 1024ch); i=3 → 32×32 (layer2, 512ch).
+            #
+            # Mask-gate (M7+ mask curriculum): zero the cardiac region in enc_layer3
+            # before fusion so the decoder cannot bypass z_cardio for cardiac reconstruction.
+            # enc_layer3 comes from the shared encoder (pre-split) and carries cardiac
+            # structure — without gating the decoder can satisfy all losses using the skip
+            # path while ignoring z_cardio entirely.
+            # Only applied at i=4 (16×16) where z_cardio operates; i=3 (32×32) skip is
+            # non-cardiac anatomy detail and is left ungated.
             if skip_feats is not None:
                 if i == 4 and 'layer3' in skip_feats:
+                    layer3 = skip_feats['layer3']                 # (B, 16, 16, 1024)
+                    if heart_mask is not None:
+                        # heart_mask: (B, 16, 16) float32 {0, 1}, 1 = cardiac pixel
+                        # cardiac_gate: 0 in cardiac region, 1 elsewhere → blocks bypass
+                        cardiac_gate = 1.0 - heart_mask[..., None]   # (B, 16, 16, 1)
+                        layer3 = layer3 * cardiac_gate
                     h = nn.Conv(ch, (1, 1), use_bias=False, name='skip3_fuse')(
-                        jnp.concatenate([h, skip_feats['layer3']], axis=-1)
+                        jnp.concatenate([h, layer3], axis=-1)
                     )
                 elif i == 3 and 'layer2' in skip_feats:
                     h = nn.Conv(ch, (1, 1), use_bias=False, name='skip2_fuse')(
@@ -813,7 +827,7 @@ class SepVAEV2(nn.Module):
         z_concat, z_c_pooled, z_d_pooled = apply_head_nulling_v2(
             latents_dict, labels, key_sample, disease_label_id=1,
         )
-        x_rec = self.decoder(z_concat, skip_feats=skip_feats, train=train)
+        x_rec = self.decoder(z_concat, skip_feats=skip_feats, heart_mask=heart_mask, train=train)
         # CTR prediction from pooled z_disease posterior mean (no sampling — stable signal)
         mu_d = latents_dict['cardiomegaly'][0]           # (2B, 16, 16, z_d_ch)
         mu_d_pooled = jnp.mean(mu_d, axis=(1, 2))        # (2B, z_d_ch)
@@ -824,5 +838,5 @@ class SepVAEV2(nn.Module):
         return self.encoder(x, train=False, bbox=bbox, has_bbox=has_bbox,
                             heart_mask=heart_mask)
 
-    def decode(self, z, skip_feats=None):
-        return self.decoder(z, skip_feats=skip_feats, train=False)
+    def decode(self, z, skip_feats=None, heart_mask=None):
+        return self.decoder(z, skip_feats=skip_feats, heart_mask=heart_mask, train=False)
