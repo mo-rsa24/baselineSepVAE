@@ -525,6 +525,7 @@ class VinBigDataPairDataset(Dataset):
         chexmask_csv: Optional[str] = None,
         chexmask_min_dice: float = 0.70,
         mask_output_size: int = 256,
+        require_mask: bool = False,
     ):
         self.use_cache = bool(use_cache)
         if self.use_cache:
@@ -538,6 +539,7 @@ class VinBigDataPairDataset(Dataset):
         self.deterministic_pairs = bool(deterministic_pairs)
         self.pair_seed = int(pair_seed)
         self.mask_output_size = int(mask_output_size)
+        self.require_mask = bool(require_mask)
         self._df = None
 
         if not self.dicom_dir.exists():
@@ -577,7 +579,6 @@ class VinBigDataPairDataset(Dataset):
             print(f"  Scan complete. Dropped {len(all_unique) - len(valid)} corrupt/blank.")
         self.normal_ids = [iid for iid in self.normal_ids if iid in valid]
         self.cardio_ids = [iid for iid in self.cardio_ids if iid in valid]
-        self._pair_cardio_ids = self._build_pair_cardio_ids()
 
         # CheXmask lookup: image_id → {heart_rle, ll_rle, rl_rle, height, width}
         self._chexmask_lookup: dict = {}
@@ -588,6 +589,32 @@ class VinBigDataPairDataset(Dataset):
             print(f"  CheXmask: {len(self._chexmask_lookup)} images (min_dice={chexmask_min_dice})")
         elif chexmask_csv is not None:
             logger.warning(f"chexmask_csv not found: {chexmask_csv} — running without mask supervision")
+
+        if self.require_mask:
+            if not self._chexmask_lookup:
+                raise ValueError(
+                    "VinBigDataPairDataset(require_mask=True) requires a valid chexmask_csv."
+                )
+            self._chexmask_valid_ids = self._build_valid_mask_id_set(
+                set(self.normal_ids) | set(self.cardio_ids)
+            )
+            n_norm_before = len(self.normal_ids)
+            n_card_before = len(self.cardio_ids)
+            self.normal_ids = [iid for iid in self.normal_ids if iid in self._chexmask_valid_ids]
+            self.cardio_ids = [iid for iid in self.cardio_ids if iid in self._chexmask_valid_ids]
+            if len(self.normal_ids) == 0 or len(self.cardio_ids) == 0:
+                raise RuntimeError(
+                    "Mask-only subset is empty after requiring valid heart masks and CTR."
+                )
+            print(
+                "[VinBigDataPairDataset] mask-only subset enabled: "
+                f"Normal {n_norm_before}->{len(self.normal_ids)}, "
+                f"Cardiomegaly {n_card_before}->{len(self.cardio_ids)}"
+            )
+        else:
+            self._chexmask_valid_ids = set()
+
+        self._pair_cardio_ids = self._build_pair_cardio_ids()
 
         print(f"[VinBigDataPairDataset]  mode={'cache-npy' if self.use_cache else 'dicom'}")
         print(f"  Normal: {len(self.normal_ids)} images")
@@ -666,6 +693,25 @@ class VinBigDataPairDataset(Dataset):
         heart_small = np.array(pil, dtype=np.float32)  # {0, 1} float32
 
         return heart_small, ctr, 1.0
+
+    def _build_valid_mask_id_set(self, image_ids) -> set:
+        """Subset of image_ids with non-empty heart masks and computable CTR."""
+        valid = set()
+        for image_id in image_ids:
+            rec = self._chexmask_lookup.get(image_id)
+            if rec is None:
+                continue
+            h, w = rec['height'], rec['width']
+            heart = _decode_rle_chexmask(rec['heart_rle'], h, w)
+            if not heart.any():
+                continue
+            ll = _decode_rle_chexmask(rec['ll_rle'], h, w)
+            rl = _decode_rle_chexmask(rec['rl_rle'], h, w)
+            ctr = _compute_ctr_chexmask(heart, ll, rl)
+            if ctr is None:
+                continue
+            valid.add(image_id)
+        return valid
 
     def __len__(self) -> int:
         return min(len(self.normal_ids), len(self.cardio_ids))

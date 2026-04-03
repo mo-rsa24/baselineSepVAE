@@ -47,6 +47,7 @@ from losses.sep_vae_losses import (
     SepVAELossConfig, sepvae_loss,
     FactorDiscriminator, factor_disc_loss,
 )
+from losses.sep_vae_v3_losses import SepVAEV3LossConfig, sepvae_v3_loss
 from losses.lpips_gan import NLayerDiscriminator, hinge_d_loss, vanilla_d_loss
 
 try:
@@ -90,8 +91,9 @@ def parse_args():
     p.add_argument("--exclude_cross_disease_overlap", action="store_true")
 
     # Model version
-    p.add_argument("--model_version",      type=str, default="v2", choices=["v1", "v2"],
-                   help="v1=CheSS backbone; v2=ResNet-50 from scratch + CBAM + SE decoder")
+    p.add_argument("--model_version",      type=str, default="v2", choices=["v1", "v2", "v3"],
+                   help="v1=CheSS backbone; v2=shared-decoder SepVAE; "
+                        "v3=binary compositional SepVAE with separate common/heart decoders")
     p.add_argument("--use_bbox_cross_attn", action="store_true",
                    help="Enable BboxCrossAttnHead (D1+). D0 uses learned query only.")
     p.add_argument("--attn_heads",          type=int, default=4,
@@ -133,6 +135,12 @@ def parse_args():
     p.add_argument("--weight_ctr_reg",       type=float, default=0.0,
                    help="CTR regression weight: L1 loss forcing z_cardio to predict "
                         "cardiac-to-thoracic ratio from CheXmask. 0=disabled. (D5+)")
+    p.add_argument("--weight_alpha_mask",    type=float, default=1.0,
+                   help="V3 alpha-mask supervision weight: BCE + Dice on predicted heart alpha.")
+    p.add_argument("--weight_common_out",    type=float, default=1.0,
+                   help="V3 common-branch reconstruction weight outside the heart mask.")
+    p.add_argument("--weight_heart_in",      type=float, default=1.0,
+                   help="V3 heart-branch reconstruction weight inside the heart mask.")
     p.add_argument("--chexmask_csv",         type=str,   default=None,
                    help="Path to CheXmask VinDr-CXR_preprocessed.csv for mask supervision. "
                         "If None, mask supervision is disabled. (D5+)")
@@ -364,6 +372,71 @@ def make_attention_grid(x_input, attn_maps, labels, x_rec=None,
     return Image.open(buf).copy()
 
 
+def make_v3_alpha_grid(x_input, x_rec, alpha_pred, labels, heart_masks, n_per_class=4):
+    """V3 panel grid: GT CXR | GT heart mask | recon + predicted alpha."""
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    import io
+    from PIL import Image
+
+    x_01 = (np.array(x_input) + 1.0) / 2.0
+    x_rec_np = np.array(x_rec)
+    alpha_np = np.array(alpha_pred)
+    labels_np = np.array(labels)
+    hm_np = np.array(heart_masks)
+
+    norm_idxs = list(np.where(labels_np == 0)[0][:n_per_class])
+    card_idxs = list(np.where(labels_np == 1)[0][:n_per_class])
+    all_idxs = norm_idxs + card_idxs
+    if not all_idxs:
+        return Image.new('RGB', (300, 100), color=(200, 200, 200))
+
+    fig, axes = plt.subplots(len(all_idxs), 3, figsize=(9.2, len(all_idxs) * 2.6), squeeze=False)
+    headers = ['GT CXR', 'GT mask', 'Recon + alpha']
+    for ci, header in enumerate(headers):
+        axes[0, ci].set_title(header, fontsize=8, pad=3)
+
+    for row_i, idx in enumerate(all_idxs):
+        img_in = x_01[idx, :, :, 0]
+        img_out = x_rec_np[idx, :, :, 0]
+        gt_mask = hm_np[idx]
+        pred_alpha = alpha_np[idx, :, :, 0]
+        H, W = img_in.shape
+        gt_mask_up = np.array(
+            jax.image.resize(gt_mask[..., None], (H, W, 1), method='nearest')[:, :, 0]
+        )
+
+        axes[row_i, 0].imshow(img_in, cmap='gray', vmin=0, vmax=1, interpolation='lanczos')
+        axes[row_i, 0].set_ylabel('Normal' if idx in norm_idxs else 'Cardio', fontsize=7, labelpad=3)
+        axes[row_i, 0].axis('off')
+
+        axes[row_i, 1].imshow(img_in, cmap='gray', vmin=0, vmax=1, interpolation='lanczos')
+        rgba = np.zeros((H, W, 4), dtype=np.float32)
+        rgba[gt_mask_up > 0.5] = [0.0, 0.9, 0.9, 0.45]
+        axes[row_i, 1].imshow(rgba, extent=(0, W, H, 0))
+        axes[row_i, 1].axis('off')
+
+        axes[row_i, 2].imshow(img_out, cmap='gray', vmin=0, vmax=1, interpolation='lanczos')
+        axes[row_i, 2].imshow(
+            pred_alpha,
+            cmap='plasma',
+            alpha=0.45,
+            vmin=0,
+            vmax=1,
+            extent=(0, W, H, 0),
+            interpolation='bilinear',
+        )
+        axes[row_i, 2].axis('off')
+
+    plt.tight_layout(pad=0.3)
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', dpi=130, bbox_inches='tight')
+    plt.close(fig)
+    buf.seek(0)
+    return Image.open(buf).copy()
+
+
 def _make_kl_heatmap(model, params, x_normal, x_cardio):
     """
     2-class per-channel KL heatmap (no scipy / 3-class dependency).
@@ -437,6 +510,7 @@ def save_latent_manifold_plot(
     save_path,
     max_samples=600,
     method="pca",
+    model_version="v2",
     use_bbox_cross_attn=False,
     bbox_mode="both",
 ):
@@ -450,22 +524,27 @@ def save_latent_manifold_plot(
     if vae_batch_stats:
         variables['batch_stats'] = vae_batch_stats
 
-    if use_bbox_cross_attn:
+    if model_version == "v3":
+        modes = ['mask_only']
+    elif use_bbox_cross_attn:
         modes = ['bbox_free', 'bbox_guided'] if bbox_mode == 'both' else [bbox_mode]
     else:
         modes = ['bbox_free']
 
     def encode_latents(x, bbox=None, has_bbox=None, heart_mask=None):
         kwargs = {}
-        if use_bbox_cross_attn:
-            kwargs['bbox']     = bbox
-            kwargs['has_bbox'] = has_bbox
-        if heart_mask is not None:
+        if model_version == "v3":
             kwargs['heart_mask'] = heart_mask
+        else:
+            if use_bbox_cross_attn:
+                kwargs['bbox']     = bbox
+                kwargs['has_bbox'] = has_bbox
+            if heart_mask is not None:
+                kwargs['heart_mask'] = heart_mask
         return model.apply(variables, x, method=model.encode, **kwargs)
 
     per_mode = {
-        mode: {'common': [], 'cardio': [], 'labels': []}
+        mode: {'common': [], 'heart': [], 'labels': []}
         for mode in modes
     }
 
@@ -521,21 +600,22 @@ def save_latent_manifold_plot(
             if remaining <= 0:
                 continue
 
+            heart_key = 'heart' if 'heart' in ld_norm else 'cardiomegaly'
             z_c_norm = np.array(jnp.mean(ld_norm['common'][0], axis=(1, 2)))
-            z_ca_norm = np.array(jnp.mean(ld_norm['cardiomegaly'][0], axis=(1, 2)))
+            z_h_norm = np.array(jnp.mean(ld_norm[heart_key][0], axis=(1, 2)))
             z_c_cardio = np.array(jnp.mean(ld_cardio['common'][0], axis=(1, 2)))
-            z_ca_cardio = np.array(jnp.mean(ld_cardio['cardiomegaly'][0], axis=(1, 2)))
+            z_h_cardio = np.array(jnp.mean(ld_cardio[heart_key][0], axis=(1, 2)))
 
             take_norm = min(z_c_norm.shape[0], remaining // 2 if remaining > 1 else remaining)
             take_cardio = min(z_c_cardio.shape[0], remaining - take_norm)
 
             if take_norm > 0:
                 per_mode[mode]['common'].extend(z_c_norm[:take_norm])
-                per_mode[mode]['cardio'].extend(z_ca_norm[:take_norm])
+                per_mode[mode]['heart'].extend(z_h_norm[:take_norm])
                 per_mode[mode]['labels'].extend([0] * take_norm)
             if take_cardio > 0:
                 per_mode[mode]['common'].extend(z_c_cardio[:take_cardio])
-                per_mode[mode]['cardio'].extend(z_ca_cardio[:take_cardio])
+                per_mode[mode]['heart'].extend(z_h_cardio[:take_cardio])
                 per_mode[mode]['labels'].extend([1] * take_cardio)
 
     if len(per_mode[modes[0]]['labels']) < 2:
@@ -559,7 +639,7 @@ def save_latent_manifold_plot(
 
     for mode_idx, mode in enumerate(modes):
         lc = np.array(per_mode[mode]['common'])
-        lcard = np.array(per_mode[mode]['cardio'])
+        lcard = np.array(per_mode[mode]['heart'])
         lbls = np.array(per_mode[mode]['labels'])
 
         cardio_norm = np.linalg.norm(lcard, axis=1)
@@ -569,9 +649,10 @@ def save_latent_manifold_plot(
         active_norm = float(cardio_norm[active_mask].mean()) if active_mask.any() else float('nan')
         ratio = float(active_norm / max(inactive_norm, 1e-6)) if np.isfinite(active_norm) and np.isfinite(inactive_norm) else float('nan')
 
-        metrics[f'z_cardio_norm_inactive_{mode}'] = inactive_norm
-        metrics[f'z_cardio_norm_active_{mode}'] = active_norm
-        metrics[f'z_cardio_norm_ratio_{mode}'] = ratio
+        latent_name = 'z_heart' if model_version == "v3" else 'z_cardio'
+        metrics[f'{latent_name}_norm_inactive_{mode}'] = inactive_norm
+        metrics[f'{latent_name}_norm_active_{mode}'] = active_norm
+        metrics[f'{latent_name}_norm_ratio_{mode}'] = ratio
 
         feature_sets = {
             'all_heads': np.concatenate([lc, lcard], axis=1),
@@ -633,14 +714,59 @@ def main():
     torch.manual_seed(args.seed)
     rng = jax.random.PRNGKey(args.seed)
 
+    IS_V1 = (args.model_version == 'v1')
     IS_V2 = (args.model_version == 'v2')
+    IS_V3 = (args.model_version == 'v3')
+
+    if IS_V3 and not getattr(args, 'chexmask_csv', None):
+        raise ValueError("SepVAEV3 requires --chexmask_csv.")
+
+    if IS_V3:
+        disabled_fields = []
+        if args.use_bbox_cross_attn:
+            disabled_fields.append('use_bbox_cross_attn')
+        if args.weight_mi_factor > 0.0:
+            disabled_fields.append('weight_mi_factor')
+        if args.weight_bbox_attn > 0.0:
+            disabled_fields.append('weight_bbox_attn')
+        if args.weight_cardio_supcon > 0.0:
+            disabled_fields.append('weight_cardio_supcon')
+        if args.weight_perceptual > 0.0:
+            disabled_fields.append('weight_perceptual')
+        if args.weight_gan > 0.0:
+            disabled_fields.append('weight_gan')
+        if args.weight_tv > 0.0:
+            disabled_fields.append('weight_tv')
+        if args.weight_masked_rec > 0.0:
+            disabled_fields.append('weight_masked_rec')
+        if disabled_fields:
+            print("V3 disables legacy bbox/MI/GAN/perceptual paths; ignoring: "
+                  + ", ".join(disabled_fields))
+        args.use_bbox_cross_attn = False
+        args.weight_mi_factor = 0.0
+        args.weight_bbox_attn = 0.0
+        args.weight_cardio_supcon = 0.0
+        args.weight_perceptual = 0.0
+        args.weight_gan = 0.0
+        args.weight_tv = 0.0
+        args.weight_masked_rec = 0.0
+        args.heart_out_zc = False
+        args.heart_in_zd = False
+        if args.weight_ctr_reg == 0.0:
+            args.weight_ctr_reg = 1.0
+            print("V3 defaulting weight_ctr_reg to 1.0 for supervised s_ctr training.")
 
     print("=" * 60)
+    latent_name = "z_heart" if IS_V3 else "z_cardio"
     print(f"BINARY SEPVAE  model={args.model_version}  "
-          f"z=[z_common({args.z_channels_common}), z_cardio({args.z_channels_disease})]")
-    print("Obj 1 — orthogonality: KL + FactorVAE MI + bbox attn")
-    print("Obj 2 — crisp recon:   MSE" +
-          (" + CheSS perceptual" if args.weight_perceptual > 0 else ""))
+          f"z=[z_common({args.z_channels_common}), {latent_name}({args.z_channels_disease})]")
+    if IS_V3:
+        print("Obj 1 — compositional routing: KL + alpha mask + branch recon + CTR")
+        print("Obj 2 — crisp recon:   full-image MSE via shared render head")
+    else:
+        print("Obj 1 — orthogonality: KL + FactorVAE MI + bbox attn")
+        print("Obj 2 — crisp recon:   MSE" +
+              (" + CheSS perceptual" if args.weight_perceptual > 0 else ""))
     print("=" * 60)
 
     # ── Output dirs ───────────────────────────────────────────────────────────
@@ -675,6 +801,8 @@ def main():
         deterministic_pairs=args.deterministic_data,
         pair_seed=args.seed,
         chexmask_csv=getattr(args, 'chexmask_csv', None),
+        mask_output_size=args.img_size,
+        require_mask=IS_V3,
     )
     train_loader_generator = None
     worker_init_fn = None
@@ -734,7 +862,26 @@ def main():
     print(f"Eval subset: {n_eval_pairs} fixed pairs ({n_eval_pairs * 2} images)")
 
     # ── Model ─────────────────────────────────────────────────────────────────
-    if IS_V2:
+    if IS_V3:
+        from models.sep_vae_v3 import SepVAEV3
+
+        sepvae = SepVAEV3(
+            z_channels_common=args.z_channels_common,
+            z_channels_heart=args.z_channels_disease,
+            attn_heads=args.attn_heads,
+            decoder_res_blocks=args.decoder_res_blocks,
+        )
+        vae_batch_stats = {}
+        dummy_x = jnp.ones((1, args.img_size, args.img_size, 1))
+        dummy_mask = jnp.ones((1, args.img_size, args.img_size))
+        rng, init_rng = jax.random.split(rng)
+        vae_vars = sepvae.init(init_rng, dummy_x, dummy_mask, key=init_rng)
+        vae_params = jax.tree_util.tree_map(jnp.array, vae_vars['params'])
+        n_vae_params = sum(p.size for p in jax.tree_util.tree_leaves(vae_params))
+        print(f"SepVAEV3 parameters: {n_vae_params:,}")
+        print(f"  mask-only subset: True  img_size: {args.img_size}  "
+              f"decoder_res_blocks: {args.decoder_res_blocks}")
+    elif IS_V2:
         from models.sep_vae_v2 import SepVAEV2
         sepvae = SepVAEV2(
             z_channels_common=args.z_channels_common,
@@ -869,8 +1016,8 @@ def main():
         print("FactorDiscriminator: disabled (weight_mi_factor=0)")
 
     # ── Optimizer ─────────────────────────────────────────────────────────────
-    if IS_V2:
-        # Single AdamW — all V2 params trained at the same LR (no frozen CheSS trunk)
+    if not IS_V1:
+        # Single AdamW — V2/V3 are trained end-to-end without a frozen CheSS trunk.
         tx_vae = optax.chain(
             optax.clip_by_global_norm(args.grad_clip),
             optax.adamw(learning_rate=args.lr_vae, weight_decay=args.weight_decay),
@@ -1092,33 +1239,53 @@ def main():
             )
 
     # ── Loss config ───────────────────────────────────────────────────────────
-    loss_cfg = SepVAELossConfig(
-        weight_rec=args.weight_rec,
-        weight_perceptual=args.weight_perceptual,
-        weight_gan=args.weight_gan,
-        weight_tv=args.weight_tv,
-        weight_masked_rec=args.weight_masked_rec,
-        weight_kl_common=args.weight_kl_common,
-        weight_kl_disease=args.weight_kl_disease,
-        weight_mi_factor=args.weight_mi_factor,
-        weight_bbox_attn=args.weight_bbox_attn,
-        weight_ctr_reg=getattr(args, 'weight_ctr_reg', 0.0),
-        weight_cardio_supcon=args.weight_cardio_supcon,
-        supcon_temperature=args.supcon_temperature,
-        sigma_inactive=args.sigma_inactive,
-        kl_free_bits=args.kl_free_bits,
-    )
-    print(f"\nLoss weights: rec={loss_cfg.weight_rec}  "
-          f"percep={loss_cfg.weight_perceptual}  "
-          f"gan={loss_cfg.weight_gan}  "
-          f"tv={loss_cfg.weight_tv}  "
-          f"masked_rec={loss_cfg.weight_masked_rec}  "
-          f"kl_c={loss_cfg.weight_kl_common}  "
-          f"kl_d={loss_cfg.weight_kl_disease}  "
-          f"kl_free_bits={loss_cfg.kl_free_bits}  "
-          f"mi_factor={loss_cfg.weight_mi_factor}  "
-          f"supcon={loss_cfg.weight_cardio_supcon}  "
-          f"bbox={loss_cfg.weight_bbox_attn}")
+    if IS_V3:
+        loss_cfg = SepVAEV3LossConfig(
+            weight_rec=args.weight_rec,
+            weight_kl_common=args.weight_kl_common,
+            weight_kl_heart=args.weight_kl_disease,
+            weight_alpha=args.weight_alpha_mask,
+            weight_common_out=args.weight_common_out,
+            weight_heart_in=args.weight_heart_in,
+            weight_ctr=getattr(args, 'weight_ctr_reg', 0.0),
+            kl_free_bits=args.kl_free_bits,
+        )
+        print(f"\nLoss weights: rec={loss_cfg.weight_rec}  "
+              f"kl_c={loss_cfg.weight_kl_common}  "
+              f"kl_h={loss_cfg.weight_kl_heart}  "
+              f"alpha={loss_cfg.weight_alpha}  "
+              f"common_out={loss_cfg.weight_common_out}  "
+              f"heart_in={loss_cfg.weight_heart_in}  "
+              f"ctr={loss_cfg.weight_ctr}  "
+              f"kl_free_bits={loss_cfg.kl_free_bits}")
+    else:
+        loss_cfg = SepVAELossConfig(
+            weight_rec=args.weight_rec,
+            weight_perceptual=args.weight_perceptual,
+            weight_gan=args.weight_gan,
+            weight_tv=args.weight_tv,
+            weight_masked_rec=args.weight_masked_rec,
+            weight_kl_common=args.weight_kl_common,
+            weight_kl_disease=args.weight_kl_disease,
+            weight_mi_factor=args.weight_mi_factor,
+            weight_bbox_attn=args.weight_bbox_attn,
+            weight_ctr_reg=getattr(args, 'weight_ctr_reg', 0.0),
+            weight_cardio_supcon=args.weight_cardio_supcon,
+            supcon_temperature=args.supcon_temperature,
+            sigma_inactive=args.sigma_inactive,
+            kl_free_bits=args.kl_free_bits,
+        )
+        print(f"\nLoss weights: rec={loss_cfg.weight_rec}  "
+              f"percep={loss_cfg.weight_perceptual}  "
+              f"gan={loss_cfg.weight_gan}  "
+              f"tv={loss_cfg.weight_tv}  "
+              f"masked_rec={loss_cfg.weight_masked_rec}  "
+              f"kl_c={loss_cfg.weight_kl_common}  "
+              f"kl_d={loss_cfg.weight_kl_disease}  "
+              f"kl_free_bits={loss_cfg.kl_free_bits}  "
+              f"mi_factor={loss_cfg.weight_mi_factor}  "
+              f"supcon={loss_cfg.weight_cardio_supcon}  "
+              f"bbox={loss_cfg.weight_bbox_attn}")
 
     # ── JIT'd steps ───────────────────────────────────────────────────────────
     _backbone_apply_fn = backbone_for_percep.apply if backbone_for_percep else None
@@ -1132,12 +1299,19 @@ def main():
         )
 
     @jax.jit
-    def get_pooled_latents(vae_params_arg, x, bbox_full, has_bbox):
+    def get_pooled_latents(vae_params_arg, x, bbox_full, has_bbox, heart_mask=None):
         """Encoder-only forward pass → spatially pooled z_c and z_ca."""
         variables = {'params': vae_params_arg}
         if _batch_stats_arg is not None:
             variables['batch_stats'] = _batch_stats_arg
-        if IS_V2 and args.use_bbox_cross_attn:
+        if IS_V3:
+            ld = sepvae.apply(
+                variables,
+                x,
+                heart_mask=heart_mask,
+                method=sepvae.encode,
+            )
+        elif IS_V2 and args.use_bbox_cross_attn:
             ld = sepvae.apply(
                 variables,
                 x,
@@ -1148,7 +1322,8 @@ def main():
         else:
             ld = sepvae.apply(variables, x, method=sepvae.encode)
         z_c  = jnp.mean(ld['common'][0],       axis=(1, 2))
-        z_ca = jnp.mean(ld['cardiomegaly'][0], axis=(1, 2))
+        heart_key = 'heart' if IS_V3 else 'cardiomegaly'
+        z_ca = jnp.mean(ld[heart_key][0], axis=(1, 2))
         return z_c, z_ca
 
     @jax.jit
@@ -1211,23 +1386,28 @@ def main():
         has_mask_arg       = batch.get('has_mask')        # (2B,) or None
 
         def loss_fn(params):
-            total_loss, logs, z_c, z_ca, x_rec = sepvae_loss(
-                sepvae, params, batch, key, loss_cfg,
-                batch_stats=_batch_stats_arg,
-                kl_anneal=kl_anneal,
-                disc_params=disc_params_frozen,
-                discriminator=discriminator,
-                backbone_apply_fn=_backbone_apply_fn,
-                backbone_variables=_backbone_vars,
-                bbox=bbox_arg,
-                has_bbox=has_bbox_arg,
-                has_bbox_query=has_bbox_query_arg,
-                patch_disc_params=patch_disc_params_frozen,
-                patch_discriminator=patch_discriminator,
-                heart_mask=heart_mask_arg,
-                ctr=ctr_arg,
-                has_mask=has_mask_arg,
-            )
+            if IS_V3:
+                total_loss, logs, z_c, z_ca, x_rec = sepvae_v3_loss(
+                    sepvae, params, batch, key, loss_cfg, kl_anneal=kl_anneal,
+                )
+            else:
+                total_loss, logs, z_c, z_ca, x_rec = sepvae_loss(
+                    sepvae, params, batch, key, loss_cfg,
+                    batch_stats=_batch_stats_arg,
+                    kl_anneal=kl_anneal,
+                    disc_params=disc_params_frozen,
+                    discriminator=discriminator,
+                    backbone_apply_fn=_backbone_apply_fn,
+                    backbone_variables=_backbone_vars,
+                    bbox=bbox_arg,
+                    has_bbox=has_bbox_arg,
+                    has_bbox_query=has_bbox_query_arg,
+                    patch_disc_params=patch_disc_params_frozen,
+                    patch_discriminator=patch_discriminator,
+                    heart_mask=heart_mask_arg,
+                    ctr=ctr_arg,
+                    has_mask=has_mask_arg,
+                )
             return total_loss, (logs, z_c, z_ca, x_rec)
         (loss, (logs, z_c, z_ca, x_rec)), grads = jax.value_and_grad(loss_fn, has_aux=True)(
             vae_state_arg.params
@@ -1241,6 +1421,11 @@ def main():
         variables = {'params': vae_params_arg}
         if _batch_stats_arg is not None:
             variables['batch_stats'] = _batch_stats_arg
+        if IS_V3:
+            outputs = sepvae.apply(
+                variables, x, heart_mask, key=key, train=False, sample=False,
+            )
+            return outputs['x_hat'], {'heart': outputs['alpha_heart']}
         if IS_V2 and args.use_bbox_cross_attn:
             x_rec, latents_dict, _, _, _ = sepvae.apply(
                 variables, x, labels, key=key, train=False,
@@ -1283,29 +1468,34 @@ def main():
                 batch['ctr']        = jnp.array(batch_torch['ctr'].numpy())          # (2B,)
                 batch['has_mask']   = jnp.array(batch_torch['has_mask'].numpy())     # (2B,)
 
-            # ── Assemble (2B, 4) bbox tensor for V2 cross-attention ──────────
-            # Normal images get a zero bbox (will have has_bbox=0 → fallback query)
-            bbox_cardio = batch['bbox_disease1']                          # (B, 4)
-            bbox_full   = jnp.concatenate(
-                [jnp.zeros_like(bbox_cardio), bbox_cardio], axis=0
-            )                                                              # (2B, 4)
-            has_bbox    = (
-                (bbox_full[:, 2] - bbox_full[:, 0]) > 1e-4
-            ).astype(jnp.float32)                                          # (2B,)
-            has_bbox_query = has_bbox
-            if args.use_bbox_cross_attn and args.bbox_dropout_prob > 0.0:
-                rng, key_bbox_dropout = jax.random.split(rng)
-                keep_mask = (
-                    1.0 - jax.random.bernoulli(
-                        key_bbox_dropout,
-                        p=args.bbox_dropout_prob,
-                        shape=has_bbox.shape,
-                    ).astype(jnp.float32)
+            if IS_V3:
+                if 'heart_mask' not in batch:
+                    raise RuntimeError("V3 batch is missing heart_mask.")
+                if not bool(jnp.all(batch['has_mask'] > 0.5)):
+                    raise RuntimeError("V3 received a batch without full mask supervision.")
+            else:
+                # ── Assemble (2B, 4) bbox tensor for V2 cross-attention ──────
+                bbox_cardio = batch['bbox_disease1']
+                bbox_full   = jnp.concatenate(
+                    [jnp.zeros_like(bbox_cardio), bbox_cardio], axis=0
                 )
-                has_bbox_query = has_bbox * keep_mask
-            batch['bbox_full'] = bbox_full
-            batch['has_bbox'] = has_bbox
-            batch['has_bbox_query'] = has_bbox_query
+                has_bbox    = (
+                    (bbox_full[:, 2] - bbox_full[:, 0]) > 1e-4
+                ).astype(jnp.float32)
+                has_bbox_query = has_bbox
+                if args.use_bbox_cross_attn and args.bbox_dropout_prob > 0.0:
+                    rng, key_bbox_dropout = jax.random.split(rng)
+                    keep_mask = (
+                        1.0 - jax.random.bernoulli(
+                            key_bbox_dropout,
+                            p=args.bbox_dropout_prob,
+                            shape=has_bbox.shape,
+                        ).astype(jnp.float32)
+                    )
+                    has_bbox_query = has_bbox * keep_mask
+                batch['bbox_full'] = bbox_full
+                batch['has_bbox'] = has_bbox
+                batch['has_bbox_query'] = has_bbox_query
 
             rng, key_disc, key_vae = jax.random.split(rng, 3)
             x_full = jnp.concatenate([batch['x_norm'], batch['x_disease1']], axis=0)
@@ -1313,7 +1503,11 @@ def main():
 
             if use_factor_disc and disc_state is not None:
                 z_c_curr, z_ca_curr = get_pooled_latents(
-                    vae_state.params, x_full, batch['bbox_full'], batch['has_bbox_query']
+                    vae_state.params,
+                    x_full,
+                    batch.get('bbox_full'),
+                    batch.get('has_bbox_query'),
+                    heart_mask=batch.get('heart_mask'),
                 )
                 disc_state, disc_loss, disc_acc = disc_step(
                     disc_state, jax.lax.stop_gradient(z_c_curr), jax.lax.stop_gradient(z_ca_curr), key_disc
@@ -1359,21 +1553,34 @@ def main():
             last_batch = batch
 
             if global_step % args.log_every == 0:
-                print(f"  Step {global_step}: "
-                      f"loss={float(logs['loss/total']):.4f}  "
-                      f"rec={float(logs['loss/reconstruction']):.4f}  "
-                      f"kl={float(logs['loss/kl_total']):.4f}  "
-                      f"mi={float(logs['loss/mi_factor']):.4f}  "
-                      f"supcon={float(logs['loss/cardio_supcon']):.4f}  "
-                      f"disc={float(logs['loss/disc']):.4f}  "
-                      f"D_acc={float(logs['metrics/disc_acc']):.2f}  "
-                      f"bbox={float(logs['loss/bbox_attn']):.4f}  "
-                      f"ratio={float(logs['metrics/z_cardio_norm_ratio']):.2f}  "
-                      f"gan_g={float(logs['loss/gan_g']):.4f}  "
-                      f"tv={float(logs['loss/tv']):.4f}  "
-                      f"msk={float(logs['loss/masked_rec']):.4f}  "
-                      f"c_ratio={float(logs['metrics/z_common_norm_ratio']):.2f}  "
-                      f"PD_acc={float(logs['metrics/patch_disc_acc']):.2f}")
+                if IS_V3:
+                    print(f"  Step {global_step}: "
+                          f"loss={float(logs['loss/total']):.4f}  "
+                          f"rec={float(logs['loss/reconstruction']):.4f}  "
+                          f"kl={float(logs['loss/kl_total']):.4f}  "
+                          f"alpha={float(logs['loss/alpha_mask']):.4f}  "
+                          f"common_out={float(logs['loss/common_out']):.4f}  "
+                          f"heart_in={float(logs['loss/heart_in']):.4f}  "
+                          f"ctr={float(logs['loss/ctr']):.4f}  "
+                          f"alpha_mean={float(logs['metrics/alpha_mean']):.2f}  "
+                          f"heart_n={float(logs['metrics/z_heart_norm_normal']):.2f}  "
+                          f"heart_c={float(logs['metrics/z_heart_norm_cardio']):.2f}")
+                else:
+                    print(f"  Step {global_step}: "
+                          f"loss={float(logs['loss/total']):.4f}  "
+                          f"rec={float(logs['loss/reconstruction']):.4f}  "
+                          f"kl={float(logs['loss/kl_total']):.4f}  "
+                          f"mi={float(logs['loss/mi_factor']):.4f}  "
+                          f"supcon={float(logs['loss/cardio_supcon']):.4f}  "
+                          f"disc={float(logs['loss/disc']):.4f}  "
+                          f"D_acc={float(logs['metrics/disc_acc']):.2f}  "
+                          f"bbox={float(logs['loss/bbox_attn']):.4f}  "
+                          f"ratio={float(logs['metrics/z_cardio_norm_ratio']):.2f}  "
+                          f"gan_g={float(logs['loss/gan_g']):.4f}  "
+                          f"tv={float(logs['loss/tv']):.4f}  "
+                          f"msk={float(logs['loss/masked_rec']):.4f}  "
+                          f"c_ratio={float(logs['metrics/z_common_norm_ratio']):.2f}  "
+                          f"PD_acc={float(logs['metrics/patch_disc_acc']):.2f}")
                 if args.wandb and _WANDB:
                     wandb.log({k: float(v) for k, v in logs.items()} | {'epoch': epoch},
                               step=global_step)
@@ -1382,20 +1589,30 @@ def main():
         # Epoch summary
         avg = {k: float(np.mean([float(log[k]) for log in epoch_logs]))
                for k in epoch_logs[0]}
-        print(f"  Summary: loss={avg['loss/total']:.4f}  "
-              f"rec={avg['loss/reconstruction']:.4f}  "
-              f"kl={avg['loss/kl_total']:.4f}  "
-              f"mi={avg['loss/mi_factor']:.4f}  "
-              f"supcon={avg['loss/cardio_supcon']:.4f}  "
-              f"disc={avg['loss/disc']:.4f}  "
-              f"D_acc={avg['metrics/disc_acc']:.2f}  "
-              f"bbox={avg['loss/bbox_attn']:.4f}  "
-              f"ratio={avg['metrics/z_cardio_norm_ratio']:.2f}  "
-              f"gan_g={avg['loss/gan_g']:.4f}  "
-              f"tv={avg['loss/tv']:.4f}  "
-              f"msk={avg['loss/masked_rec']:.4f}  "
-              f"c_ratio={avg['metrics/z_common_norm_ratio']:.2f}  "
-              f"PD_acc={avg['metrics/patch_disc_acc']:.2f}")
+        if IS_V3:
+            print(f"  Summary: loss={avg['loss/total']:.4f}  "
+                  f"rec={avg['loss/reconstruction']:.4f}  "
+                  f"kl={avg['loss/kl_total']:.4f}  "
+                  f"alpha={avg['loss/alpha_mask']:.4f}  "
+                  f"common_out={avg['loss/common_out']:.4f}  "
+                  f"heart_in={avg['loss/heart_in']:.4f}  "
+                  f"ctr={avg['loss/ctr']:.4f}  "
+                  f"alpha_mean={avg['metrics/alpha_mean']:.2f}")
+        else:
+            print(f"  Summary: loss={avg['loss/total']:.4f}  "
+                  f"rec={avg['loss/reconstruction']:.4f}  "
+                  f"kl={avg['loss/kl_total']:.4f}  "
+                  f"mi={avg['loss/mi_factor']:.4f}  "
+                  f"supcon={avg['loss/cardio_supcon']:.4f}  "
+                  f"disc={avg['loss/disc']:.4f}  "
+                  f"D_acc={avg['metrics/disc_acc']:.2f}  "
+                  f"bbox={avg['loss/bbox_attn']:.4f}  "
+                  f"ratio={avg['metrics/z_cardio_norm_ratio']:.2f}  "
+                  f"gan_g={avg['loss/gan_g']:.4f}  "
+                  f"tv={avg['loss/tv']:.4f}  "
+                  f"msk={avg['loss/masked_rec']:.4f}  "
+                  f"c_ratio={avg['metrics/z_common_norm_ratio']:.2f}  "
+                  f"PD_acc={avg['metrics/patch_disc_acc']:.2f}")
 
         # Checkpoint
         ckpt_path = None
@@ -1429,7 +1646,7 @@ def main():
 
             x_rec, attn_maps = reconstruct_and_encode(
                 vis_params, x_full, labels_v, vis_key,
-                last_batch['bbox_full'], last_batch['has_bbox'],
+                last_batch.get('bbox_full'), last_batch.get('has_bbox'),
                 heart_mask=last_batch.get('heart_mask'),
             )
 
@@ -1439,17 +1656,28 @@ def main():
             print(f"  Saved recon grid: {grid_path}")
 
             attn_path = diag_dir / f"attn_maps_epoch{epoch:04d}.png"
-            make_attention_grid(
-                np.array(x_full),
-                {k: np.array(v) for k, v in attn_maps.items()},
-                np.array(labels_v),
-                x_rec=np.array(x_rec),
-                heart_masks=np.array(last_batch['heart_mask'])
-                            if 'heart_mask' in last_batch else None,
-                n_per_class=args.n_samples_per_class,
-                bboxes_cardio=np.array(last_batch['bbox_disease1']),
-            ).save(str(attn_path))
-            print(f"  Saved attention maps: {attn_path}")
+            if IS_V3:
+                make_v3_alpha_grid(
+                    np.array(x_full),
+                    np.array(x_rec),
+                    np.array(attn_maps['heart']),
+                    np.array(labels_v),
+                    np.array(last_batch['heart_mask']),
+                    n_per_class=args.n_samples_per_class,
+                ).save(str(attn_path))
+                print(f"  Saved alpha maps: {attn_path}")
+            else:
+                make_attention_grid(
+                    np.array(x_full),
+                    {k: np.array(v) for k, v in attn_maps.items()},
+                    np.array(labels_v),
+                    x_rec=np.array(x_rec),
+                    heart_masks=np.array(last_batch['heart_mask'])
+                                if 'heart_mask' in last_batch else None,
+                    n_per_class=args.n_samples_per_class,
+                    bboxes_cardio=np.array(last_batch['bbox_disease1']),
+                ).save(str(attn_path))
+                print(f"  Saved attention maps: {attn_path}")
 
             if args.wandb and _WANDB:
                 wandb.log({
@@ -1458,7 +1686,7 @@ def main():
                 }, step=global_step)
 
             # ── Scenario overlay ──────────────────────────────────────────────
-            if _DIAG and _make_scenario_overlay is not None:
+            if (not IS_V3) and _DIAG and _make_scenario_overlay is not None:
                 try:
                     scenario_img  = _make_scenario_overlay(metrics_history_path, epoch)
                     scenario_path = diag_dir / f"loss_scenarios_epoch{epoch:04d}.png"
@@ -1480,6 +1708,7 @@ def main():
                 sepvae, manifold_params, vae_batch_stats, eval_loader,
                 manifold_path, max_samples=min(args.manifold_max_samples, args.eval_subset_size),
                 method=args.manifold_method,
+                model_version=args.model_version,
                 use_bbox_cross_attn=args.use_bbox_cross_attn,
                 bbox_mode=args.manifold_bbox_mode,
             )
@@ -1532,6 +1761,7 @@ def main():
                 global_step=global_step,
                 output_dir=diag_dir,
                 use_wandb=(args.wandb and _WANDB),
+                model_version=args.model_version,
                 use_bbox_cross_attn=args.use_bbox_cross_attn,
                 has_chexmask=getattr(args, 'chexmask_csv', None) is not None,
                 heart_in_zd=getattr(args, 'heart_in_zd', False),
