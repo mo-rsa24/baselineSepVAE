@@ -161,6 +161,34 @@ def make_scenario_overlay(
                     transform=ax.transAxes, fontsize=8, color="gray",
                     style="italic")
 
+        # ── Y-axis limits: anchor to current run, ensure bands are visible ──
+        if len(vals_cur) > 0:
+            cur_min = float(vals_cur.min())
+            cur_max = float(vals_cur.max())
+            cur_range = max(cur_max - cur_min, abs(cur_max) * 0.05, 1e-8)
+
+            y_lo = cur_min - 0.10 * cur_range
+            y_hi = cur_max + 0.30 * cur_range
+
+            # Ensure the bad threshold line is always visible
+            if bad_thresh is not None:
+                if bad_above:
+                    y_hi = max(y_hi, bad_thresh * 1.15)
+                else:
+                    y_lo = min(y_lo, bad_thresh * 0.85)
+
+            # Ensure the healthy corridor is always visible
+            if h_hi is not None:
+                y_hi = max(y_hi, h_hi * 1.20)
+            if h_lo is not None:
+                y_lo = min(y_lo, h_lo * 0.80)
+
+            # Don't go below zero for non-negative metrics
+            if metric_key not in ("loss/mi_factor",):
+                y_lo = max(y_lo, 0.0)
+
+            ax.set_ylim(y_lo, y_hi)
+
         ax.set_title(title, fontsize=9, pad=4)
         ax.set_xlabel("Epoch", fontsize=7)
         ax.tick_params(labelsize=7)

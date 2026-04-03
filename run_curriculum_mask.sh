@@ -26,7 +26,7 @@
 #   CUDA_VISIBLE_DEVICES=0 sbatch run_curriculum_mask.sh m1 m3
 
 #SBATCH --job-name=sepvae-mask-curriculum
-#SBATCH --nodelist=mscluster108
+#SBATCH --nodelist=mscluster107
 #SBATCH --partition=biggpu
 #SBATCH --time=72:00:00
 #SBATCH --ntasks=1

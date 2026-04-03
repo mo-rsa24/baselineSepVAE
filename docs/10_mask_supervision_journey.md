@@ -364,7 +364,18 @@ completely, but requires more implementation work and a new attention map loggin
 |---|---|---|
 | Branch | `feature/mask-supervision` | All mask investigation work — scripts, docs, results |
 | Tag | `explore/mask-supervision-v1` | End of exploration phase. Diagnostic complete. |
-| Future tag | `feature/mask-supervision-v2` | When CTR regression head is integrated into training |
+| Tag | `explore/mask-supervision-v2` | GT heart-mask supervision integrated into the shared-decoder SepVAEV2 training path |
+| Milestone tag | `milestone/mask-supervision-gt-v1` | First successful GT heart-mask pass replacing bbox-guided spatial supervision in the encoder path |
+
+### 6.1 Milestone Status
+
+`milestone/mask-supervision-gt-v1` records the first successful pass where CheXmask
+heart masks replace coarse bbox-guided spatial supervision in the encoder-side routing.
+
+This milestone is intentionally recorded before the compositional V3 redesign. The
+current SepVAEV2 still uses a shared decoder, so leakage from heart-specific structure
+back into `z_common` remains structurally possible even though the encoder branches are
+now spatially mask-routed by GT heart masks.
 
 **Scripts on this branch:**
 

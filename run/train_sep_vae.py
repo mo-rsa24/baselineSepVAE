@@ -63,11 +63,15 @@ try:
     from scripts.plot_training_scenarios import make_scenario_overlay as _make_scenario_overlay
     from scripts.eval_counterfactual import run_counterfactual_eval as _run_counterfactual_eval
     from scripts.make_scaffolding import run_scaffolding as _run_scaffolding
+    from scripts.make_traversal import run_traversal as _run_traversal
+    from scripts.make_traversal import run_composition as _run_composition
     _DIAG = True
 except Exception as _diag_err:
     _make_scenario_overlay  = None
     _run_counterfactual_eval = None
     _run_scaffolding         = None
+    _run_traversal           = None
+    _run_composition         = None
     _DIAG = False
     print(f"[warn] Diagnostic scripts not loaded: {_diag_err}")
 
@@ -132,6 +136,21 @@ def parse_args():
     p.add_argument("--chexmask_csv",         type=str,   default=None,
                    help="Path to CheXmask VinDr-CXR_preprocessed.csv for mask supervision. "
                         "If None, mask supervision is disabled. (D5+)")
+    p.add_argument("--heart_out_zc",         action="store_true",
+                   help="Heart-out z_c: zero the cardiac region from h_shared before the "
+                        "z_c (bg) encoder branch so z_c cannot encode cardiac features. "
+                        "Requires --chexmask_csv. z_d branch still sees the full image. "
+                        "Combined with decoder mask gate (Cardiomegaly-only), this forces "
+                        "strict heart/non-heart disentanglement without input-level masking.")
+    p.add_argument("--heart_in_zd",          action="store_true",
+                   help="Heart-in z_d: show ONLY the cardiac region (complement of "
+                        "heart_out_zc) to the z_d (tg) encoder branch. Replaces the "
+                        "cross-attention disease head with a plain ConvHeadGN — no "
+                        "attention is needed when the mask structurally bounds z_d to "
+                        "the cardiac spatial support. Together with heart_out_zc this "
+                        "gives a full spatial factorisation: z_c↔background, "
+                        "z_d↔cardiac silhouette, which is the prerequisite for valid "
+                        "CFG composition in the downstream LDM. Requires --chexmask_csv.")
     p.add_argument("--gan_start_step",       type=int,   default=5000,
                    help="Steps from the START OF THIS RUN before PatchGAN activates. "
                         "Counted from phase_start_global_step (not absolute global_step), "
@@ -436,16 +455,14 @@ def save_latent_manifold_plot(
     else:
         modes = ['bbox_free']
 
-    def encode_latents(x, bbox=None, has_bbox=None):
+    def encode_latents(x, bbox=None, has_bbox=None, heart_mask=None):
+        kwargs = {}
         if use_bbox_cross_attn:
-            return model.apply(
-                variables,
-                x,
-                bbox=bbox,
-                has_bbox=has_bbox,
-                method=model.encode,
-            )
-        return model.apply(variables, x, method=model.encode)
+            kwargs['bbox']     = bbox
+            kwargs['has_bbox'] = has_bbox
+        if heart_mask is not None:
+            kwargs['heart_mask'] = heart_mask
+        return model.apply(variables, x, method=model.encode, **kwargs)
 
     per_mode = {
         mode: {'common': [], 'cardio': [], 'labels': []}
@@ -469,23 +486,35 @@ def save_latent_manifold_plot(
             (bbox_cardio[:, 2] - bbox_cardio[:, 0]) > 1e-4
         ).astype(jnp.float32)
 
+        # heart_mask lives in the second half of the 2B batch tensor
+        hm_jax_cardio = None
+        hm_jax_norm   = None
+        if 'heart_mask' in batch_torch:
+            hm_full  = jnp.array(batch_torch['heart_mask'].numpy())  # (2B, S, S)
+            B_half   = hm_full.shape[0] // 2
+            hm_jax_norm   = hm_full[:B_half]   # (B, S, S) — normal half
+            hm_jax_cardio = hm_full[B_half:]   # (B, S, S) — cardio half
+
         for mode in modes:
             ld_norm = encode_latents(
                 x_norm,
                 bbox=bbox_zero_norm,
                 has_bbox=has_bbox_zero_norm,
+                heart_mask=hm_jax_norm,
             )
             if mode == 'bbox_guided':
                 ld_cardio = encode_latents(
                     x_cardio,
                     bbox=bbox_cardio,
                     has_bbox=has_bbox_guided_cardio,
+                    heart_mask=hm_jax_cardio,
                 )
             else:
                 ld_cardio = encode_latents(
                     x_cardio,
                     bbox=bbox_zero_cardio,
                     has_bbox=has_bbox_zero_cardio,
+                    heart_mask=hm_jax_cardio,
                 )
 
             remaining = max_samples - len(per_mode[mode]['labels'])
@@ -715,6 +744,8 @@ def main():
             use_bbox_cross_attn=args.use_bbox_cross_attn,
             bbox_query_mix=args.bbox_query_mix,
             decoder_res_blocks=args.decoder_res_blocks,
+            heart_out_zc=args.heart_out_zc,
+            heart_in_zd=args.heart_in_zd,
         )
         vae_batch_stats = {}   # GroupNorm — no batch_stats
         dummy_x      = jnp.ones((1, args.img_size, args.img_size, 1))
@@ -724,9 +755,9 @@ def main():
         vae_params = jax.tree_util.tree_map(jnp.array, vae_vars['params'])
         n_vae_params = sum(p.size for p in jax.tree_util.tree_leaves(vae_params))
         print(f"SepVAEV2 parameters: {n_vae_params:,}")
-        print(f"  bbox cross-attn: {args.use_bbox_cross_attn}  "
-              f"attn_heads: {args.attn_heads}  img_size: {args.img_size}  "
-              f"decoder_res_blocks: {args.decoder_res_blocks}")
+        print(f"  heart_out_zc: {args.heart_out_zc}  heart_in_zd: {args.heart_in_zd}  "
+              f"bbox cross-attn: {args.use_bbox_cross_attn}  "
+              f"img_size: {args.img_size}  decoder_res_blocks: {args.decoder_res_blocks}")
 
     else:
         # ── V1: CheSS backbone ────────────────────────────────────────────────
@@ -1496,20 +1527,46 @@ def main():
                         print(f"  [warn] counterfactual eval failed: {_e}")
 
             # ── 8-panel research claim scaffolding ───────────────────────────
+            _diag_kwargs = dict(
+                epoch=epoch,
+                global_step=global_step,
+                output_dir=diag_dir,
+                use_wandb=(args.wandb and _WANDB),
+                use_bbox_cross_attn=args.use_bbox_cross_attn,
+                has_chexmask=getattr(args, 'chexmask_csv', None) is not None,
+                heart_in_zd=getattr(args, 'heart_in_zd', False),
+            )
             if _DIAG and _run_scaffolding is not None:
                 try:
                     _run_scaffolding(
                         sepvae, manifold_params, vae_batch_stats,
                         eval_loader,
-                        epoch=epoch,
-                        global_step=global_step,
-                        output_dir=diag_dir,
-                        use_wandb=(args.wandb and _WANDB),
-                        use_bbox_cross_attn=args.use_bbox_cross_attn,
-                        has_chexmask=getattr(args, 'chexmask_csv', None) is not None,
+                        **_diag_kwargs,
                     )
                 except Exception as _e:
                     print(f"  [warn] scaffolding failed: {_e}")
+
+            # ── z_d traversal strip ──────────────────────────────────────────
+            if _DIAG and _run_traversal is not None:
+                try:
+                    _run_traversal(
+                        sepvae, manifold_params, vae_batch_stats,
+                        eval_loader,
+                        **_diag_kwargs,
+                    )
+                except Exception as _e:
+                    print(f"  [warn] traversal strip failed: {_e}")
+
+            # ── Swapped-reconstruction composition grid ──────────────────────
+            if _DIAG and _run_composition is not None:
+                try:
+                    _run_composition(
+                        sepvae, manifold_params, vae_batch_stats,
+                        eval_loader,
+                        **_diag_kwargs,
+                    )
+                except Exception as _e:
+                    print(f"  [warn] composition grid failed: {_e}")
 
         epoch_record = {'epoch': epoch, 'global_step': global_step}
         epoch_record.update({k: float(v) for k, v in avg.items()})

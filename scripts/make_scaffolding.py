@@ -9,21 +9,28 @@ Panel layout (left → right):
   00  Real cardiomegaly CXR
   01  Same + GT bbox (green)
   02  Same + GT segmentation mask (CheXmask heart, cyan)
-  03  Reconstruction  (z_common + z_disease)
-  04  Anatomy-only    (z_common, z_disease=0)
-  05  Reconstruction + predicted mask (attention map overlay, plasma)
-  06  Pixel diff ×5   |panel03 − panel04|  (hot colourmap)
+  03  Reconstruction  (z_c + z_d)
+  04  Anatomy-only    (z_c alone, z_d = 0)
+  05  Cardiac-only    (z_d alone, z_c = 0, no skip)  ← should converge toward col 02
+  06  Pixel diff ×5   |col03 − col04|                 ← emergent cardiac segmentation
 
-Predicted mask source: BboxCrossAttnHead attention map (16×16), bilinear-
-upsampled to image resolution.  In the mask curriculum the attention head
-is trained to match the CheXmask binary prior, so at inference time it
-functions as a predicted cardiac segmentation map.
+Column 05 rationale (heart_in_zd mode):
+  z_d is encoded from cardiac pixels only (complement masking).  Decoding
+  z_d alone (z_c=0, no skip connections) reveals exactly what the cardiac
+  code has captured — it should converge to look like the GT mask in col 02.
+  This is the direct visualisation of the LDM composition prerequisite:
+  decode(z_d) spatially bounded to the cardiac silhouette.
+
+Column 06 rationale:
+  |full recon − anatomy-only| amplified ×5.  When z_d is properly
+  disentangled, this diff equals the cardiac contribution and should
+  match col 02.  Used as the emergent segmentation quality metric.
 
 Exported function (called from train_sep_vae.py every manifold_every epochs):
     run_scaffolding(model, params, batch_stats, eval_loader,
                     epoch, global_step, output_dir,
                     use_wandb=False, use_bbox_cross_attn=True,
-                    has_chexmask=False) → Path or None
+                    has_chexmask=False, heart_in_zd=False) → Path or None
 
 Logged to W&B as "diagnostics/scaffolding".
 """
@@ -86,6 +93,7 @@ def run_scaffolding(
     use_wandb: bool = False,
     use_bbox_cross_attn: bool = True,
     has_chexmask: bool = False,
+    heart_in_zd: bool = False,
 ) -> Path | None:
     """
     Build the 7-panel scaffolding strip and save it.
@@ -156,29 +164,36 @@ def run_scaffolding(
         ld_cardio = _encode_batch(model, params, x_cardio_jax,
                                    heart_mask=heart_mask_jax)
 
-    mu_c  = ld_cardio["common"][0]       # (1, H_lat, W_lat, C_c)
-    mu_d  = ld_cardio["cardiomegaly"][0] # (1, H_lat, W_lat, C_d)
-    attn  = np.array(ld_cardio["attn_maps"]["cardiomegaly"][0])  # (H_lat, W_lat)
+    mu_c       = ld_cardio["common"][0]       # (1, H_lat, W_lat, C_c)
+    mu_d       = ld_cardio["cardiomegaly"][0] # (1, H_lat, W_lat, C_d)
     skip_feats = ld_cardio.get("skip_feats")
 
-    # ── 4. Reconstruct: full and anatomy-only ────────────────────────────────
+    # ── 4. Reconstruct: full, anatomy-only, and cardiac-only ─────────────────
     recon_full    = _decode_z(model, params, mu_c, mu_d,
                               skip_feats=skip_feats, heart_mask=heart_mask_jax)
     recon_anatomy = _decode_z(model, params, mu_c, jnp.zeros_like(mu_d),
                               skip_feats=skip_feats, heart_mask=heart_mask_jax)
+    # heart_mask passed so the cardiac skip gate is CLOSED for anatomy-only.
+    # Skip features are zeroed in the cardiac region, preventing the skip path
+    # from bypassing z_d and filling in the heart.  This makes col 04 show a
+    # CXR without a heart (cardiac region inpainted from z_c alone), and col 06
+    # diff = |full − anatomy-only| will show the cardiac silhouette cleanly.
+
+    # Panel 05: z_d-only decode (z_c=0, no skip connections).
+    # With heart_in_zd, z_d was encoded from cardiac pixels only (complement
+    # masking), so decoding z_d alone reveals exactly what the cardiac code
+    # has learned.  No skip features: pure z_d signal, unaugmented by context.
+    # Convergence goal: this should look like the GT mask in panel 02.
+    recon_cardiac = _decode_z(model, params, jnp.zeros_like(mu_c), mu_d,
+                               skip_feats=None, heart_mask=None)
 
     img_orig    = _prep_img((x_cardio_np + 1.0) / 2.0)
     img_recon   = _prep_img(np.array(recon_full[0]))
     img_anatomy = _prep_img(np.array(recon_anatomy[0]))
+    img_cardiac = _prep_img(np.array(recon_cardiac[0]))
     img_diff    = np.clip(np.abs(img_recon - img_anatomy) * 5.0, 0.0, 1.0)
 
     H, W = img_orig.shape
-
-    # ── 5. Upsample attention map to image size (predicted mask) ─────────────
-    attn_up = np.array(
-        jax.image.resize(attn[..., None], (H, W, 1), method="bilinear")[:, :, 0]
-    )
-    attn_up = (attn_up - attn_up.min()) / (attn_up.max() - attn_up.min() + 1e-8)
 
     # ── 6. Compose the 7-panel strip ─────────────────────────────────────────
     CAPTIONS = [
@@ -186,8 +201,8 @@ def run_scaffolding(
         "01  + GT bbox",
         "02  + GT seg mask\n(CheXmask)",
         "03  Reconstruction\n(z_c + z_d)",
-        "04  Anatomy-only\n(z_d = 0)",
-        "05  Recon +\npred mask (attn)",
+        "04  Anatomy-only\n(z_c, z_d = 0)",
+        "05  Cardiac-only\n(z_d, z_c = 0)",
         "06  Diff ×5\n|03 − 04|",
     ]
 
@@ -248,12 +263,11 @@ def run_scaffolding(
     # 04: anatomy-only
     _show_cxr(axes[4], img_anatomy)
 
-    # 05: reconstruction + predicted mask (attention heatmap)
-    axes[5].imshow(img_recon, cmap="gray", vmin=0, vmax=1, interpolation="lanczos")
-    axes[5].imshow(attn_up, cmap="plasma", alpha=0.50,
-                   vmin=0, vmax=1, extent=(0, W, H, 0), interpolation="bilinear")
-    axes[5].set_xticks([]); axes[5].set_yticks([])
-    for sp in axes[5].spines.values(): sp.set_visible(False)
+    # 05: z_d-only reconstruction — what the cardiac code alone decodes to.
+    # With heart_in_zd: z_d was encoded from cardiac pixels only, so this
+    # should converge to look like the GT mask in panel 02.
+    # Without heart_in_zd: shows attn-based z_d decode (less well-bounded).
+    _show_cxr(axes[5], img_cardiac)
 
     # 06: amplified diff
     _show_cxr(axes[6], img_diff, cmap="hot", vmin=0, vmax=1)
@@ -262,10 +276,11 @@ def run_scaffolding(
     for ax, cap in zip(axes, CAPTIONS):
         ax.set_xlabel(cap, fontsize=6.5, labelpad=4, ha="center")
 
+    mode_tag = "heart_in_zd" if heart_in_zd else "attn"
     fig.suptitle(
-        f"Research claim scaffold — Epoch {epoch}  "
-        f"(step {global_step:,})\n"
-        "Left→right: real CXR → bbox → GT seg → recon → anatomy-only → recon+pred mask → diff",
+        f"Research claim scaffold — Epoch {epoch}  (step {global_step:,})  [{mode_tag}]\n"
+        "Left→right: real CXR → bbox → GT seg → recon(z_c+z_d) → anatomy(z_c) "
+        "→ cardiac(z_d) → diff×5",
         fontsize=8, y=1.02,
     )
 

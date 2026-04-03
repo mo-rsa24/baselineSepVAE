@@ -485,19 +485,32 @@ class SepVAEEncoderV2(nn.Module):
     """
     Binary encoder — ResNet-50 from scratch + self-attention + configurable disease head.
 
-    use_bbox_cross_attn=False  →  D0: learned query, no bbox input needed
-    use_bbox_cross_attn=True   →  D1+: bbox Gaussian prior drives disease head
+    Masking modes (select via flags):
+        heart_out_zc=True  →  zero cardiac region from bg_branch input so z_c
+                               cannot encode cardiac features.
+        heart_in_zd=True   →  show ONLY cardiac region to tg_branch input so z_d
+                               is structurally bounded to cardiac spatial support.
+                               Replaces cross-attention head with ConvHeadGN —
+                               no attention needed when the mask enforces locality.
+        Both together      →  full spatial factorisation: z_c ↔ background,
+                               z_d ↔ cardiac silhouette. Required for clean CFG
+                               composition in the downstream LDM.
+
+    use_bbox_cross_attn=True   →  D1+ cross-attention head (used when heart_in_zd=False)
+    use_bbox_cross_attn=False  →  D0 learned-query head   (used when heart_in_zd=False)
 
     The trunk (layers 1–3 + bottleneck attention) is shared; two learnable
     Layer4 branches then diverge to produce z_common and z_disease separately.
-    Both branch outputs are upsampled to 16×16 for the latent space.
+    Both branch outputs remain at 16×16 for the latent space.
     """
     z_channels_common:   int  = 16
     z_channels_disease:  int  = 16
     query_dim:           int  = 256
     attn_heads:          int  = 4
-    use_bbox_cross_attn: bool = False   # False = D0, True = D1+
+    use_bbox_cross_attn: bool = False   # False = D0, True = D1+; ignored when heart_in_zd
     bbox_query_mix:      float = 0.7
+    heart_out_zc:        bool = False   # True = zero cardiac from z_c encoder branch
+    heart_in_zd:         bool = False   # True = show only cardiac to z_d encoder branch
 
     def setup(self):
         # nn.remat wraps modules for gradient checkpointing — avoids the tracer
@@ -509,7 +522,15 @@ class SepVAEEncoderV2(nn.Module):
             out_channels=self.z_channels_common,
             name='head_common',
         )
-        if self.use_bbox_cross_attn:
+        if self.heart_in_zd:
+            # Complement masking enforces spatial support structurally — no
+            # cross-attention needed.  ConvHeadGN is identical to the z_c head,
+            # operating on already-masked cardiac features only.
+            self.head_disease = ConvHeadGN(
+                out_channels=self.z_channels_disease,
+                name='head_disease',
+            )
+        elif self.use_bbox_cross_attn:
             self.head_disease = BboxCrossAttnHead(
                 out_channels=self.z_channels_disease,
                 query_dim=self.query_dim,
@@ -536,15 +557,53 @@ class SepVAEEncoderV2(nn.Module):
         # Shared trunk (nn.remat on submodule handles gradient checkpointing)
         h_shared, h_layer2 = self.backbone(x)   # (B, 16, 16, 1024), (B, 32, 32, 512)
 
-        # Learnable layer4 branches — stride=1 throughout, stay at 16×16
-        h_bg = self.bg_branch(h_shared)   # (B, 16, 16, 2048)
-        h_tg = self.tg_branch(h_shared)   # (B, 16, 16, 2048)
+        # Resize heart mask to latent spatial resolution once, reuse for both branches.
+        # Only computed when at least one branch needs it.
+        hm_enc = None
+        if heart_mask is not None and (self.heart_out_zc or self.heart_in_zd):
+            hm_enc = jax.image.resize(
+                heart_mask[..., None], (B, 16, 16, 1), method='nearest',
+            )   # (B, 16, 16, 1)  binary float32, 1 = cardiac pixel
+
+        # ── z_c branch: block cardiac region ────────────────────────────────
+        # heart_out_zc: zero cardiac pixels from h_shared before bg_branch so
+        # z_c cannot encode any cardiac features.
+        if self.heart_out_zc and hm_enc is not None:
+            h_shared_zc = h_shared * (1.0 - hm_enc)
+        else:
+            h_shared_zc = h_shared
+
+        # ── z_d branch: show ONLY cardiac region ────────────────────────────
+        # heart_in_zd: zero non-cardiac pixels from h_shared before tg_branch.
+        # This is the structural complement of heart_out_zc.  Together they
+        # partition the encoder's spatial field-of-view between z_c and z_d,
+        # which is the prerequisite for valid CFG composition in the LDM:
+        #   p(u | z_c, c_1, c_2) ∝ p(u|z_c,c_1)·p(u|z_c,c_2) / p(u|z_c)
+        # requires c_1 ⊥ c_2 | z_c, which holds iff their spatial supports
+        # are disjoint — enforced here structurally, not via learned attention.
+        if self.heart_in_zd and hm_enc is not None:
+            h_shared_zd = h_shared * hm_enc
+        else:
+            h_shared_zd = h_shared
+
+        h_bg = self.bg_branch(h_shared_zc)   # (B, 16, 16, 2048)
+        h_tg = self.tg_branch(h_shared_zd)   # (B, 16, 16, 2048)
 
         # Common head
         mu_c, logvar_c = self.head_common(h_bg)
 
         # Disease head
-        if self.use_bbox_cross_attn:
+        if self.heart_in_zd:
+            # No cross-attention — spatial support is already enforced by masking.
+            mu_d, logvar_d = self.head_disease(h_tg)
+            # Return the latent-resolution mask as the nominal "attn_map" so
+            # downstream visualisation code has a spatial map to display.
+            # This is the GT cardiac support, not a learned prediction.
+            if hm_enc is not None:
+                attn_map = hm_enc[:, :, :, 0]   # (B, 16, 16)
+            else:
+                attn_map = jnp.ones((B, 16, 16), dtype=jnp.float32) / (16.0 * 16.0)
+        elif self.use_bbox_cross_attn:
             mu_d, logvar_d, attn_map = self.head_disease(
                 h_tg, bbox=bbox, has_bbox=has_bbox, heart_mask=heart_mask,
             )
@@ -728,16 +787,23 @@ class SepVAEDecoderV2(nn.Module):
                     layer3 = skip_feats['layer3']                 # (B, 16, 16, 1024)
                     if heart_mask is not None:
                         # heart_mask: (B, Hm, Wm) float32 {0, 1}, 1 = cardiac pixel.
-                        # Resize to match layer3 spatial size (16×16) if needed.
+                        # Gate is applied ONLY to the Cardiomegaly half of the batch.
+                        # Batch layout: [Normal 0:B_half | Cardiomegaly B_half:2*B_half]
+                        # Applying the gate to Normal images blocks their cardiac skip while
+                        # z_d=0 (hard-zero nulling), forcing z_c to inpaint the cardiac
+                        # region — creating an inconsistent training signal that collapses z_d.
                         gate_h, gate_w = layer3.shape[1], layer3.shape[2]
                         B_dec = layer3.shape[0]
-                        if heart_mask.shape[1] != gate_h or heart_mask.shape[2] != gate_w:
+                        B_half = B_dec // 2
+                        # Zero out the mask for Normal images (first half of batch)
+                        mask_for_gate = heart_mask.at[:B_half].set(0.0)
+                        if mask_for_gate.shape[1] != gate_h or mask_for_gate.shape[2] != gate_w:
                             hm_gate = jax.image.resize(
-                                heart_mask[..., None],
+                                mask_for_gate[..., None],
                                 (B_dec, gate_h, gate_w, 1), method='nearest',
                             )[:, :, :, 0]
                         else:
-                            hm_gate = heart_mask
+                            hm_gate = mask_for_gate
                         # cardiac_gate: 0 in cardiac region, 1 elsewhere → blocks bypass
                         cardiac_gate = 1.0 - hm_gate[..., None]      # (B, 16, 16, 1)
                         layer3 = layer3 * cardiac_gate
@@ -798,6 +864,8 @@ class SepVAEV2(nn.Module):
     use_bbox_cross_attn: bool = False
     bbox_query_mix:      float = 0.7
     decoder_res_blocks:  int  = 2   # increase to 3 for D2+ without breaking D1 resume
+    heart_out_zc:        bool = False   # True = zero cardiac region from z_c encoder input
+    heart_in_zd:         bool = False   # True = show only cardiac region to z_d encoder input
 
     def setup(self):
         self.encoder = SepVAEEncoderV2(
@@ -807,6 +875,8 @@ class SepVAEV2(nn.Module):
             attn_heads=self.attn_heads,
             use_bbox_cross_attn=self.use_bbox_cross_attn,
             bbox_query_mix=self.bbox_query_mix,
+            heart_out_zc=self.heart_out_zc,
+            heart_in_zd=self.heart_in_zd,
         )
         # SE-gated decoder: 16×16 → 256×256, 4 SmoothUp calls.
         # num_res_blocks=3 adds ResBlockSE_2 at every scale; Flax names blocks by
