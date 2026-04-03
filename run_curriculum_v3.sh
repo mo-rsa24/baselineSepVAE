@@ -17,7 +17,7 @@
 #   WANDB_PROJECT=my-project sbatch run_curriculum_v3.sh
 
 #SBATCH --job-name=sepvae-v3
-#SBATCH --nodelist=mscluster107
+#SBATCH --nodelist=mscluster109
 #SBATCH --partition=biggpu
 #SBATCH --time=72:00:00
 #SBATCH --ntasks=1
