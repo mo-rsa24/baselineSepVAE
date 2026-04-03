@@ -78,6 +78,35 @@ def ctr_regression_loss(
     return jnp.sum(per_sample * valid) / jnp.maximum(jnp.sum(valid), 1.0)
 
 
+def alpha_overlap_metrics(
+    alpha_pred: jnp.ndarray,
+    target_mask: jnp.ndarray,
+    valid: Optional[jnp.ndarray] = None,
+    threshold: float = 0.5,
+    eps: float = 1e-6,
+) -> Tuple[jnp.ndarray, jnp.ndarray]:
+    """Thresholded Dice and IoU for the predicted alpha mask."""
+    pred_bin = (alpha_pred >= threshold).astype(jnp.float32)
+    target_bin = (target_mask >= 0.5).astype(jnp.float32)
+
+    pred_flat = pred_bin.reshape(pred_bin.shape[0], -1)
+    target_flat = target_bin.reshape(target_bin.shape[0], -1)
+    inter = jnp.sum(pred_flat * target_flat, axis=1)
+    pred_sum = jnp.sum(pred_flat, axis=1)
+    target_sum = jnp.sum(target_flat, axis=1)
+    union = pred_sum + target_sum - inter
+
+    dice = (2.0 * inter + eps) / (pred_sum + target_sum + eps)
+    iou = (inter + eps) / (union + eps)
+
+    if valid is None:
+        valid = jnp.ones((alpha_pred.shape[0],), dtype=jnp.float32)
+    valid = valid.reshape(-1)
+    dice = jnp.sum(dice * valid) / jnp.maximum(jnp.sum(valid), 1.0)
+    iou = jnp.sum(iou * valid) / jnp.maximum(jnp.sum(valid), 1.0)
+    return dice, iou
+
+
 def optax_sigmoid_bce(logits: jnp.ndarray, labels: jnp.ndarray) -> jnp.ndarray:
     """Minimal sigmoid BCE to avoid importing optax into the loss module."""
     return (
@@ -159,6 +188,9 @@ def sepvae_v3_loss(
         x_01, x_heart, mask_full, inside=True, valid=valid_mask
     )
     l_ctr = ctr_regression_loss(outputs["ctr_pred"], ctr, valid=valid_mask)
+    alpha_dice_metric, alpha_iou_metric = alpha_overlap_metrics(
+        alpha_pred, mask_full, valid=valid_mask
+    )
 
     anneal = kl_anneal if kl_anneal is not None else jnp.float32(1.0)
     l_kl = anneal * (
@@ -207,7 +239,10 @@ def sepvae_v3_loss(
         "loss/heart_in": l_heart_in,
         "loss/ctr": l_ctr,
         "metrics/alpha_mean": jnp.mean(alpha_pred),
+        "metrics/alpha_dice": alpha_dice_metric,
+        "metrics/alpha_iou": alpha_iou_metric,
         "metrics/ctr_pred_mean": jnp.mean(outputs["ctr_pred"]),
+        "metrics/ctr_mae": l_ctr,
         "metrics/z_common_norm_mean": jnp.mean(z_common_norm),
         "metrics/z_heart_norm_mean": jnp.mean(z_heart_norm),
         "metrics/z_heart_norm_normal": z_heart_norm_normal,

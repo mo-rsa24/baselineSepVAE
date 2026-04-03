@@ -141,6 +141,15 @@ def parse_args():
                    help="V3 common-branch reconstruction weight outside the heart mask.")
     p.add_argument("--weight_heart_in",      type=float, default=1.0,
                    help="V3 heart-branch reconstruction weight inside the heart mask.")
+    p.add_argument("--v3_curriculum",        action=argparse.BooleanOptionalAction, default=True,
+                   help="Enable staged V3 curriculum: M0 rec+KL, M1 add alpha, "
+                        "M2 add common_out/heart_in, M3 add CTR.")
+    p.add_argument("--v3_alpha_start_frac",  type=float, default=0.05,
+                   help="Fraction of total epochs after which V3 alpha supervision activates.")
+    p.add_argument("--v3_parts_start_frac",  type=float, default=0.15,
+                   help="Fraction of total epochs after which V3 common_out/heart_in activate.")
+    p.add_argument("--v3_ctr_start_frac",    type=float, default=0.30,
+                   help="Fraction of total epochs after which V3 CTR supervision activates.")
     p.add_argument("--chexmask_csv",         type=str,   default=None,
                    help="Path to CheXmask VinDr-CXR_preprocessed.csv for mask supervision. "
                         "If None, mask supervision is disabled. (D5+)")
@@ -437,6 +446,127 @@ def make_v3_alpha_grid(x_input, x_rec, alpha_pred, labels, heart_masks, n_per_cl
     return Image.open(buf).copy()
 
 
+def make_v3_branch_grid(
+    x_input,
+    x_common,
+    x_heart,
+    x_rec,
+    alpha_pred,
+    labels,
+    heart_masks,
+    n_per_class=4,
+):
+    """V3 multi-sample grid: GT | GT mask | pred alpha | common | heart | blend."""
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    import io
+    from PIL import Image
+
+    x_01 = (np.array(x_input) + 1.0) / 2.0
+    x_common_np = np.array(x_common)
+    x_heart_np = np.array(x_heart)
+    x_rec_np = np.array(x_rec)
+    alpha_np = np.array(alpha_pred)
+    labels_np = np.array(labels)
+    hm_np = np.array(heart_masks)
+
+    norm_idxs = list(np.where(labels_np == 0)[0][:n_per_class])
+    card_idxs = list(np.where(labels_np == 1)[0][:n_per_class])
+    all_idxs = norm_idxs + card_idxs
+    if not all_idxs:
+        return Image.new('RGB', (300, 100), color=(200, 200, 200))
+
+    fig, axes = plt.subplots(len(all_idxs), 6, figsize=(18.5, len(all_idxs) * 2.6), squeeze=False)
+    headers = ['GT', 'GT mask', 'Pred alpha', 'Common', 'Heart', 'Blend']
+    for ci, header in enumerate(headers):
+        axes[0, ci].set_title(header, fontsize=8, pad=3)
+
+    for row_i, idx in enumerate(all_idxs):
+        img_in = x_01[idx, :, :, 0]
+        img_common = x_common_np[idx, :, :, 0]
+        img_heart = x_heart_np[idx, :, :, 0]
+        img_rec = x_rec_np[idx, :, :, 0]
+        alpha = alpha_np[idx, :, :, 0]
+        gt_mask = hm_np[idx]
+        H, W = img_in.shape
+        gt_mask_up = np.array(
+            jax.image.resize(gt_mask[..., None], (H, W, 1), method='nearest')[:, :, 0]
+        )
+
+        axes[row_i, 0].imshow(img_in, cmap='gray', vmin=0, vmax=1, interpolation='lanczos')
+        axes[row_i, 0].set_ylabel('Normal' if idx in norm_idxs else 'Cardio', fontsize=7, labelpad=3)
+        axes[row_i, 0].axis('off')
+
+        axes[row_i, 1].imshow(img_in, cmap='gray', vmin=0, vmax=1, interpolation='lanczos')
+        rgba = np.zeros((H, W, 4), dtype=np.float32)
+        rgba[gt_mask_up > 0.5] = [0.0, 0.9, 0.9, 0.45]
+        axes[row_i, 1].imshow(rgba, extent=(0, W, H, 0))
+        axes[row_i, 1].axis('off')
+
+        axes[row_i, 2].imshow(alpha, cmap='plasma', vmin=0, vmax=1, interpolation='bilinear')
+        axes[row_i, 2].axis('off')
+
+        axes[row_i, 3].imshow(img_common, cmap='gray', vmin=0, vmax=1, interpolation='lanczos')
+        axes[row_i, 3].axis('off')
+
+        axes[row_i, 4].imshow(img_heart, cmap='gray', vmin=0, vmax=1, interpolation='lanczos')
+        axes[row_i, 4].axis('off')
+
+        axes[row_i, 5].imshow(img_rec, cmap='gray', vmin=0, vmax=1, interpolation='lanczos')
+        axes[row_i, 5].axis('off')
+
+    plt.tight_layout(pad=0.3)
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', dpi=130, bbox_inches='tight')
+    plt.close(fig)
+    buf.seek(0)
+    return Image.open(buf).copy()
+
+
+def make_ctr_scatter(ctr_true, ctr_pred, labels, has_mask=None):
+    """Small calibration scatter for s_ctr supervision."""
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    import io
+    from PIL import Image
+
+    y_true = np.array(ctr_true, dtype=np.float32).reshape(-1)
+    y_pred = np.array(ctr_pred, dtype=np.float32).reshape(-1)
+    lbls = np.array(labels).reshape(-1)
+    valid = np.ones_like(y_true, dtype=bool) if has_mask is None else (np.array(has_mask).reshape(-1) > 0.5)
+
+    y_true = y_true[valid]
+    y_pred = y_pred[valid]
+    lbls = lbls[valid]
+
+    fig, ax = plt.subplots(1, 1, figsize=(4.2, 4.2))
+    if y_true.size > 0:
+        for cls, color, name in [(0, 'tab:blue', 'Normal'), (1, 'tab:red', 'Cardio')]:
+            mask = lbls == cls
+            if np.any(mask):
+                ax.scatter(y_true[mask], y_pred[mask], s=24, alpha=0.75, c=color, label=name)
+        lim_lo = float(min(y_true.min(), y_pred.min(), 0.0))
+        lim_hi = float(max(y_true.max(), y_pred.max(), 1.0))
+        ax.plot([lim_lo, lim_hi], [lim_lo, lim_hi], linestyle='--', linewidth=1.0, color='black')
+        mae = float(np.mean(np.abs(y_pred - y_true)))
+        ax.set_title(f'CTR calibration\nMAE={mae:.3f}', fontsize=8)
+        ax.legend(fontsize=7)
+    else:
+        ax.set_title('CTR calibration\n(no valid masks)', fontsize=8)
+    ax.set_xlabel('CTR true', fontsize=8)
+    ax.set_ylabel('CTR pred', fontsize=8)
+    ax.grid(True, alpha=0.3)
+
+    buf = io.BytesIO()
+    plt.tight_layout(pad=0.4)
+    plt.savefig(buf, format='png', dpi=130, bbox_inches='tight')
+    plt.close(fig)
+    buf.seek(0)
+    return Image.open(buf).copy()
+
+
 def _make_kl_heatmap(model, params, x_normal, x_cardio):
     """
     2-class per-channel KL heatmap (no scipy / 3-class dependency).
@@ -697,6 +827,75 @@ def save_latent_manifold_plot(
     plt.savefig(str(save_path), dpi=150)
     plt.close(fig)
     return metrics
+
+
+def _epoch_fraction_to_start(total_epochs: int, frac: float) -> int:
+    frac = float(np.clip(frac, 0.0, 1.0))
+    return max(1, int(np.ceil(total_epochs * frac)))
+
+
+def build_v3_curriculum_cfg(base_cfg, epoch: int, total_epochs: int, args):
+    """Stage V3 losses by epoch while keeping the architecture fixed."""
+    if not args.v3_curriculum:
+        return base_cfg, {
+            'curriculum/v3_enabled': 0.0,
+            'curriculum/v3_stage_index': 3.0,
+            'curriculum/v3_alpha_active': 1.0,
+            'curriculum/v3_parts_active': 1.0,
+            'curriculum/v3_ctr_active': 1.0,
+            'curriculum/v3_alpha_weight': float(base_cfg.weight_alpha),
+            'curriculum/v3_common_out_weight': float(base_cfg.weight_common_out),
+            'curriculum/v3_heart_in_weight': float(base_cfg.weight_heart_in),
+            'curriculum/v3_ctr_weight': float(base_cfg.weight_ctr),
+        }, "full"
+
+    alpha_start = _epoch_fraction_to_start(total_epochs, args.v3_alpha_start_frac)
+    parts_start = _epoch_fraction_to_start(total_epochs, args.v3_parts_start_frac)
+    ctr_start = _epoch_fraction_to_start(total_epochs, args.v3_ctr_start_frac)
+    parts_start = max(parts_start, alpha_start)
+    ctr_start = max(ctr_start, parts_start)
+
+    alpha_active = float(epoch >= alpha_start)
+    parts_active = float(epoch >= parts_start)
+    ctr_active = float(epoch >= ctr_start)
+
+    stage_name = "m0_rec_kl"
+    stage_index = 0.0
+    if ctr_active > 0.5:
+        stage_name = "m3_ctr"
+        stage_index = 3.0
+    elif parts_active > 0.5:
+        stage_name = "m2_parts"
+        stage_index = 2.0
+    elif alpha_active > 0.5:
+        stage_name = "m1_alpha"
+        stage_index = 1.0
+
+    cfg = SepVAEV3LossConfig(
+        weight_rec=base_cfg.weight_rec,
+        weight_kl_common=base_cfg.weight_kl_common,
+        weight_kl_heart=base_cfg.weight_kl_heart,
+        weight_alpha=base_cfg.weight_alpha * alpha_active,
+        weight_common_out=base_cfg.weight_common_out * parts_active,
+        weight_heart_in=base_cfg.weight_heart_in * parts_active,
+        weight_ctr=base_cfg.weight_ctr * ctr_active,
+        kl_free_bits=base_cfg.kl_free_bits,
+    )
+    logs = {
+        'curriculum/v3_enabled': 1.0,
+        'curriculum/v3_stage_index': stage_index,
+        'curriculum/v3_alpha_active': alpha_active,
+        'curriculum/v3_parts_active': parts_active,
+        'curriculum/v3_ctr_active': ctr_active,
+        'curriculum/v3_alpha_weight': float(cfg.weight_alpha),
+        'curriculum/v3_common_out_weight': float(cfg.weight_common_out),
+        'curriculum/v3_heart_in_weight': float(cfg.weight_heart_in),
+        'curriculum/v3_ctr_weight': float(cfg.weight_ctr),
+        'curriculum/v3_alpha_start_epoch': float(alpha_start),
+        'curriculum/v3_parts_start_epoch': float(parts_start),
+        'curriculum/v3_ctr_start_epoch': float(ctr_start),
+    }
+    return cfg, logs, stage_name
 
 
 # ============================================================================
@@ -1240,7 +1439,7 @@ def main():
 
     # ── Loss config ───────────────────────────────────────────────────────────
     if IS_V3:
-        loss_cfg = SepVAEV3LossConfig(
+        loss_cfg_base = SepVAEV3LossConfig(
             weight_rec=args.weight_rec,
             weight_kl_common=args.weight_kl_common,
             weight_kl_heart=args.weight_kl_disease,
@@ -1250,16 +1449,16 @@ def main():
             weight_ctr=getattr(args, 'weight_ctr_reg', 0.0),
             kl_free_bits=args.kl_free_bits,
         )
-        print(f"\nLoss weights: rec={loss_cfg.weight_rec}  "
-              f"kl_c={loss_cfg.weight_kl_common}  "
-              f"kl_h={loss_cfg.weight_kl_heart}  "
-              f"alpha={loss_cfg.weight_alpha}  "
-              f"common_out={loss_cfg.weight_common_out}  "
-              f"heart_in={loss_cfg.weight_heart_in}  "
-              f"ctr={loss_cfg.weight_ctr}  "
-              f"kl_free_bits={loss_cfg.kl_free_bits}")
+        print(f"\nBase loss weights: rec={loss_cfg_base.weight_rec}  "
+              f"kl_c={loss_cfg_base.weight_kl_common}  "
+              f"kl_h={loss_cfg_base.weight_kl_heart}  "
+              f"alpha={loss_cfg_base.weight_alpha}  "
+              f"common_out={loss_cfg_base.weight_common_out}  "
+              f"heart_in={loss_cfg_base.weight_heart_in}  "
+              f"ctr={loss_cfg_base.weight_ctr}  "
+              f"kl_free_bits={loss_cfg_base.kl_free_bits}")
     else:
-        loss_cfg = SepVAELossConfig(
+        loss_cfg_base = SepVAELossConfig(
             weight_rec=args.weight_rec,
             weight_perceptual=args.weight_perceptual,
             weight_gan=args.weight_gan,
@@ -1275,17 +1474,17 @@ def main():
             sigma_inactive=args.sigma_inactive,
             kl_free_bits=args.kl_free_bits,
         )
-        print(f"\nLoss weights: rec={loss_cfg.weight_rec}  "
-              f"percep={loss_cfg.weight_perceptual}  "
-              f"gan={loss_cfg.weight_gan}  "
-              f"tv={loss_cfg.weight_tv}  "
-              f"masked_rec={loss_cfg.weight_masked_rec}  "
-              f"kl_c={loss_cfg.weight_kl_common}  "
-              f"kl_d={loss_cfg.weight_kl_disease}  "
-              f"kl_free_bits={loss_cfg.kl_free_bits}  "
-              f"mi_factor={loss_cfg.weight_mi_factor}  "
-              f"supcon={loss_cfg.weight_cardio_supcon}  "
-              f"bbox={loss_cfg.weight_bbox_attn}")
+        print(f"\nLoss weights: rec={loss_cfg_base.weight_rec}  "
+              f"percep={loss_cfg_base.weight_perceptual}  "
+              f"gan={loss_cfg_base.weight_gan}  "
+              f"tv={loss_cfg_base.weight_tv}  "
+              f"masked_rec={loss_cfg_base.weight_masked_rec}  "
+              f"kl_c={loss_cfg_base.weight_kl_common}  "
+              f"kl_d={loss_cfg_base.weight_kl_disease}  "
+              f"kl_free_bits={loss_cfg_base.kl_free_bits}  "
+              f"mi_factor={loss_cfg_base.weight_mi_factor}  "
+              f"supcon={loss_cfg_base.weight_cardio_supcon}  "
+              f"bbox={loss_cfg_base.weight_bbox_attn}")
 
     # ── JIT'd steps ───────────────────────────────────────────────────────────
     _backbone_apply_fn = backbone_for_percep.apply if backbone_for_percep else None
@@ -1375,7 +1574,7 @@ def main():
 
     @jax.jit
     def vae_step(vae_state_arg, batch, disc_params_frozen, patch_disc_params_frozen,
-                 key, kl_anneal):
+                 key, kl_anneal, loss_cfg_arg):
         """Update VAE with all losses including FactorVAE MI and PatchGAN (both discs frozen).
         bbox_full and has_bbox are pre-assembled in the batch dict by the train loop."""
         bbox_arg           = batch.get('bbox_full')       # (2B, 4) or None
@@ -1388,11 +1587,11 @@ def main():
         def loss_fn(params):
             if IS_V3:
                 total_loss, logs, z_c, z_ca, x_rec = sepvae_v3_loss(
-                    sepvae, params, batch, key, loss_cfg, kl_anneal=kl_anneal,
+                    sepvae, params, batch, key, loss_cfg_arg, kl_anneal=kl_anneal,
                 )
             else:
                 total_loss, logs, z_c, z_ca, x_rec = sepvae_loss(
-                    sepvae, params, batch, key, loss_cfg,
+                    sepvae, params, batch, key, loss_cfg_arg,
                     batch_stats=_batch_stats_arg,
                     kl_anneal=kl_anneal,
                     disc_params=disc_params_frozen,
@@ -1439,6 +1638,26 @@ def main():
             )
         return x_rec, latents_dict['attn_maps']
 
+    @jax.jit
+    def reconstruct_v3_diagnostics(vae_params_arg, x, heart_mask, key):
+        """Deterministic V3 diagnostics: recon, alpha, branch renders, CTR pred."""
+        variables = {'params': vae_params_arg}
+        outputs = sepvae.apply(
+            variables,
+            x,
+            heart_mask,
+            key=key,
+            train=False,
+            sample=False,
+        )
+        return (
+            outputs['x_hat'],
+            outputs['alpha_heart'],
+            outputs['aux']['x_common'],
+            outputs['aux']['x_heart'],
+            outputs['ctr_pred'],
+        )
+
     # ── Training loop ─────────────────────────────────────────────────────────
     print("\n" + "=" * 60)
     print("TRAINING" + (f" (resuming from epoch {start_epoch})" if start_epoch > 1 else ""))
@@ -1448,9 +1667,24 @@ def main():
         kl_anneal = jnp.float32(
             min(1.0, epoch / args.kl_warmup_epochs) if args.kl_warmup_epochs > 0 else 1.0
         )
+        if IS_V3:
+            epoch_loss_cfg, v3_curriculum_logs, v3_stage_name = build_v3_curriculum_cfg(
+                loss_cfg_base, epoch, args.epochs, args,
+            )
+        else:
+            epoch_loss_cfg = loss_cfg_base
+            v3_curriculum_logs = {}
+            v3_stage_name = None
         anneal_str = (f"  [KL anneal={float(kl_anneal):.3f}]"
                       if args.kl_warmup_epochs > 0 else "")
         print(f"\nEpoch {epoch}/{args.epochs}{anneal_str}")
+        if IS_V3:
+            print("  V3 curriculum: "
+                  f"{v3_stage_name}  "
+                  f"alpha={epoch_loss_cfg.weight_alpha:.3f}  "
+                  f"common_out={epoch_loss_cfg.weight_common_out:.3f}  "
+                  f"heart_in={epoch_loss_cfg.weight_heart_in:.3f}  "
+                  f"ctr={epoch_loss_cfg.weight_ctr:.3f}")
 
         epoch_logs = []
         last_batch = None
@@ -1527,7 +1761,7 @@ def main():
             # Step 2: VAE update on the same batch.
             vae_state, logs, _, _, x_rec = vae_step(
                 vae_state, batch, disc_params_frozen, patch_disc_params_frozen,
-                key_vae, kl_anneal
+                key_vae, kl_anneal, epoch_loss_cfg
             )
 
             # Step 3: PatchGAN discriminator update on the current reconstruction.
@@ -1548,7 +1782,7 @@ def main():
                 'metrics/disc_acc':       disc_acc,
                 'loss/patch_disc':        patch_disc_loss,
                 'metrics/patch_disc_acc': patch_disc_acc,
-            }
+            } | v3_curriculum_logs
             epoch_logs.append(logs)
             last_batch = batch
 
@@ -1562,6 +1796,8 @@ def main():
                           f"common_out={float(logs['loss/common_out']):.4f}  "
                           f"heart_in={float(logs['loss/heart_in']):.4f}  "
                           f"ctr={float(logs['loss/ctr']):.4f}  "
+                          f"dice={float(logs['metrics/alpha_dice']):.3f}  "
+                          f"iou={float(logs['metrics/alpha_iou']):.3f}  "
                           f"alpha_mean={float(logs['metrics/alpha_mean']):.2f}  "
                           f"heart_n={float(logs['metrics/z_heart_norm_normal']):.2f}  "
                           f"heart_c={float(logs['metrics/z_heart_norm_cardio']):.2f}")
@@ -1597,6 +1833,8 @@ def main():
                   f"common_out={avg['loss/common_out']:.4f}  "
                   f"heart_in={avg['loss/heart_in']:.4f}  "
                   f"ctr={avg['loss/ctr']:.4f}  "
+                  f"dice={avg['metrics/alpha_dice']:.3f}  "
+                  f"iou={avg['metrics/alpha_iou']:.3f}  "
                   f"alpha_mean={avg['metrics/alpha_mean']:.2f}")
         else:
             print(f"  Summary: loss={avg['loss/total']:.4f}  "
@@ -1643,12 +1881,20 @@ def main():
 
             x_full   = jnp.concatenate([last_batch['x_norm'], last_batch['x_disease1']], axis=0)
             labels_v = last_batch['disease_labels']
+            branch_grid_path = None
+            ctr_path = None
 
-            x_rec, attn_maps = reconstruct_and_encode(
-                vis_params, x_full, labels_v, vis_key,
-                last_batch.get('bbox_full'), last_batch.get('has_bbox'),
-                heart_mask=last_batch.get('heart_mask'),
-            )
+            if IS_V3:
+                x_rec, alpha_pred, x_common_vis, x_heart_vis, ctr_pred_vis = reconstruct_v3_diagnostics(
+                    vis_params, x_full, last_batch['heart_mask'], vis_key,
+                )
+                attn_maps = {'heart': alpha_pred}
+            else:
+                x_rec, attn_maps = reconstruct_and_encode(
+                    vis_params, x_full, labels_v, vis_key,
+                    last_batch.get('bbox_full'), last_batch.get('has_bbox'),
+                    heart_mask=last_batch.get('heart_mask'),
+                )
 
             grid_path = samples_dir / f"recon_epoch{epoch:04d}.png"
             make_recon_grid(x_full, x_rec, labels_v,
@@ -1666,6 +1912,28 @@ def main():
                     n_per_class=args.n_samples_per_class,
                 ).save(str(attn_path))
                 print(f"  Saved alpha maps: {attn_path}")
+
+                branch_grid_path = diag_dir / f"v3_branches_epoch{epoch:04d}.png"
+                make_v3_branch_grid(
+                    np.array(x_full),
+                    np.array(x_common_vis),
+                    np.array(x_heart_vis),
+                    np.array(x_rec),
+                    np.array(alpha_pred),
+                    np.array(labels_v),
+                    np.array(last_batch['heart_mask']),
+                    n_per_class=args.n_samples_per_class,
+                ).save(str(branch_grid_path))
+                print(f"  Saved V3 branch grid: {branch_grid_path}")
+
+                ctr_path = diag_dir / f"v3_ctr_epoch{epoch:04d}.png"
+                make_ctr_scatter(
+                    np.array(last_batch['ctr']),
+                    np.array(ctr_pred_vis),
+                    np.array(labels_v),
+                    has_mask=np.array(last_batch['has_mask']),
+                ).save(str(ctr_path))
+                print(f"  Saved CTR scatter: {ctr_path}")
             else:
                 make_attention_grid(
                     np.array(x_full),
@@ -1680,10 +1948,15 @@ def main():
                 print(f"  Saved attention maps: {attn_path}")
 
             if args.wandb and _WANDB:
-                wandb.log({
+                payload = {
                     "samples/recon_grid":    wandb.Image(str(grid_path)),
                     "diagnostics/attn_maps": wandb.Image(str(attn_path)),
-                }, step=global_step)
+                }
+                if branch_grid_path is not None:
+                    payload["diagnostics/v3_branches"] = wandb.Image(str(branch_grid_path))
+                if ctr_path is not None:
+                    payload["diagnostics/v3_ctr_scatter"] = wandb.Image(str(ctr_path))
+                wandb.log(payload, step=global_step)
 
             # ── Scenario overlay ──────────────────────────────────────────────
             if (not IS_V3) and _DIAG and _make_scenario_overlay is not None:
