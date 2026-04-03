@@ -20,11 +20,18 @@ __pycache__/
 *.pyo
 *.csv
 *.png
+*.pdf
+*.jpg
+*.jpeg
+*.svg
 *.pyd
 *.egg-info/
 dist/
 build/
 .eggs/
+
+# Allow intentionally tracked documentation figures in one explicit location.
+!docs/assets/**
 
 # ── Jupyter ───────────────────────────────────────────────────────────────────
 .ipynb_checkpoints/
