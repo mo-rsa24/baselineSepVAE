@@ -133,8 +133,12 @@ def kl_divergence_standard(
     33 → 11,600 spikes observed without this guard.
     """
     kl_per_dim = 0.5 * (jnp.square(mu) + jnp.exp(logvar) - 1.0 - logvar)
-    if free_bits > 0.0:
-        kl_per_dim = jnp.maximum(kl_per_dim, free_bits)
+    free_bits_arr = jnp.asarray(free_bits, dtype=kl_per_dim.dtype)
+    kl_per_dim = jnp.where(
+        free_bits_arr > 0.0,
+        jnp.maximum(kl_per_dim, free_bits_arr),
+        kl_per_dim,
+    )
     sum_axes = tuple(range(1, mu.ndim))
     return jnp.sum(kl_per_dim, axis=sum_axes)
 
@@ -171,8 +175,12 @@ def kl_divergence_conditional(
         jnp.square(mu) / prior_var + jnp.exp(logvar) / prior_var
         - 1.0 - (logvar - prior_logvar)
     )
-    if free_bits > 0.0:
-        kl_per_dim = jnp.maximum(kl_per_dim, free_bits)
+    free_bits_arr = jnp.asarray(free_bits, dtype=kl_per_dim.dtype)
+    kl_per_dim = jnp.where(
+        free_bits_arr > 0.0,
+        jnp.maximum(kl_per_dim, free_bits_arr),
+        kl_per_dim,
+    )
     sum_axes = tuple(range(1, mu.ndim))
     return jnp.sum(kl_per_dim, axis=sum_axes)
 

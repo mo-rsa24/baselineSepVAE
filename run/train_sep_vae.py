@@ -954,6 +954,12 @@ def main():
         if args.weight_ctr_reg == 0.0:
             args.weight_ctr_reg = 1.0
             print("V3 defaulting weight_ctr_reg to 1.0 for supervised s_ctr training.")
+        if args.num_workers != 0:
+            print("V3 forcing num_workers=0 to avoid JAX + fork DataLoader deadlocks.")
+            args.num_workers = 0
+        if args.eval_num_workers != 0:
+            print("V3 forcing eval_num_workers=0 to avoid JAX + fork DataLoader deadlocks.")
+            args.eval_num_workers = 0
 
     print("=" * 60)
     latent_name = "z_heart" if IS_V3 else "z_cardio"
@@ -1572,7 +1578,7 @@ def main():
         )
         return patch_disc_state_arg.apply_gradients(grads=grads), pd_loss, pd_acc
 
-    @jax.jit
+    @partial(jax.jit, static_argnums=(6,))
     def vae_step(vae_state_arg, batch, disc_params_frozen, patch_disc_params_frozen,
                  key, kl_anneal, loss_cfg_arg):
         """Update VAE with all losses including FactorVAE MI and PatchGAN (both discs frozen).
