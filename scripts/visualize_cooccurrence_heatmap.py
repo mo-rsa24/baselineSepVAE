@@ -125,7 +125,7 @@ def add_cell_border(ax, row, col, color, lw=2.5, zorder=10):
     ))
 
 
-def annotate_pair(ax, i, j, text, color='black', dx=0.6, dy=-0.6, fontsize=7.5):
+def annotate_pair(ax, i, j, text, color='black', dx=0.6, dy=-0.6, fontsize=10):
     """Add a callout annotation pointing to cell (i,j)."""
     ax.annotate(
         text,
@@ -151,12 +151,12 @@ def draw_heatmap(ax, data, cmap, norm, labels, title, fmt_fn,
             tc = 'white' if normed > text_thresh else '#222'
             fw = 'bold' if i == j else 'normal'
             ax.text(j, i, fmt_fn(v), ha='center', va='center',
-                    fontsize=6.5, color=tc, fontweight=fw)
+                    fontsize=9, color=tc, fontweight=fw)
 
     ax.set_xticks(range(N))
     ax.set_yticks(range(N))
-    ax.set_xticklabels(labels, rotation=40, ha='right', fontsize=8.5)
-    ax.set_yticklabels(labels, fontsize=8.5)
+    ax.set_xticklabels(labels, rotation=40, ha='right', fontsize=12)
+    ax.set_yticklabels(labels, fontsize=12)
 
     # Bold + colour tick labels for the SepVAE pair
     for cid, ticks in [(PAIR[0], ax.get_xticklabels()),
@@ -170,9 +170,10 @@ def draw_heatmap(ax, data, cmap, norm, labels, title, fmt_fn,
                 tick.set_fontweight('bold')
                 tick.set_color('#b5000a')
 
-    ax.set_title(title, fontsize=10, fontweight='bold', pad=10)
+    ax.set_title(title, fontsize=13, fontweight='bold', pad=12)
     cbar = plt.colorbar(im, ax=ax, fraction=0.035, pad=0.02)
-    cbar.set_label(cbar_label, fontsize=8.5)
+    cbar.set_label(cbar_label, fontsize=11)
+    cbar.ax.tick_params(labelsize=10)
     return im
 
 
@@ -216,7 +217,7 @@ def visualize(args):
 
     # ── Figure layout ─────────────────────────────────────────────────────────
     ncols     = 1 if args.single else 2
-    fig_w     = 11 if args.single else 22
+    fig_w     = 14 if args.single else 26
     fig, axes = plt.subplots(1, ncols, figsize=(fig_w, 10),
                              constrained_layout=True)
     if args.single:
@@ -227,8 +228,7 @@ def visualize(args):
     draw_heatmap(
         axes[0], disp_mat,
         cmap='YlOrRd', norm=disp_norm, labels=LABELS,
-        title=f"{panel_label}Co-occurrence counts  [{scale_tag}]\n"
-              "Diagonal = individual disease prevalence · Off-diagonal = joint occurrence",
+        title=f"{panel_label}VinBigData co-occurrence matrix  [{scale_tag}]",
         fmt_fn=fmt_fn,
         cbar_label=cbar_label,
         text_thresh=0.55,
@@ -240,7 +240,7 @@ def visualize(args):
         f"Cardiomegaly ∩ Pleural Thickening\n"
         f"n={n_ab:,}  ({pct_a:.1f}% of Cardiomegaly,\n"
         f"{pct_b:.1f}% of Pleural Thickening)",
-        color='#1a6fba', dx=1.2, dy=-2.5, fontsize=8,
+        color='#1a6fba', dx=1.2, dy=-2.5, fontsize=10,
     )
 
     # ── Panel B: scarcity ratio (skipped in --single mode) ────────────────────
@@ -264,7 +264,7 @@ def visualize(args):
                 facecolor='#bbbbbb', edgecolor='white', linewidth=0.5, zorder=2,
             ))
             axes[1].text(i, i, f'{diag[i]:,}', ha='center', va='center',
-                         fontsize=6.0, color='#333', fontweight='bold', zorder=3)
+                         fontsize=9, color='#333', fontweight='bold', zorder=3)
         add_cell_border(axes[1], pi, pj, color='#1a6fba', lw=3.0)
         add_cell_border(axes[1], pj, pi, color='#1a6fba', lw=3.0)
         annotate_pair(
@@ -289,14 +289,14 @@ def visualize(args):
                        label='Diagonal — individual prevalence (Panel B)')
         )
     fig.legend(handles=legend_handles, loc='lower center',
-               ncol=len(legend_handles), fontsize=9, framealpha=0.9,
+               ncol=len(legend_handles), fontsize=11, framealpha=0.9,
                bbox_to_anchor=(0.5, -0.04))
 
-    fig.suptitle(
-        "VinBigData — Co-occurrence & Scarcity: empirical motivation for compositional generation\n"
-        "Bright diagonal vs. dark off-diagonal reveals the low-resource co-morbidity problem",
-        fontsize=12, y=1.02,
-    )
+    if not args.single:
+        fig.suptitle(
+            "VinBigData — Co-occurrence & Scarcity",
+            fontsize=14, y=1.02,
+        )
 
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)

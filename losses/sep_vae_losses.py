@@ -322,6 +322,69 @@ def supervised_contrastive_loss(
 
 
 # ============================================================================
+# CTR Decorrelation Adversary  (V3 — prevent z_heart from encoding heart size)
+# ============================================================================
+
+class CTRAdversary(nn.Module):
+    """MLP that predicts CTR from pooled z_heart.
+
+    Trained adversarially: the adversary minimises CTR prediction error,
+    while the VAE encoder is trained to maximise it via a confusion loss
+    (push adversary predictions toward the uninformative midpoint 0.5).
+    This forces heart-size information out of z_heart and into s_ctr.
+
+    Architecture mirrors FactorDiscriminator: input → 64 → 64 → 1.
+    Input dim: z_channels_heart (typically 16).
+    Output: unbounded scalar CTR prediction, one per sample.
+    """
+    hidden_dim: int = 64
+
+    @nn.compact
+    def __call__(self, z: jnp.ndarray) -> jnp.ndarray:
+        h = nn.Dense(self.hidden_dim, name='fc1')(z)
+        h = nn.leaky_relu(h, negative_slope=0.2)
+        h = nn.Dense(self.hidden_dim, name='fc2')(h)
+        h = nn.leaky_relu(h, negative_slope=0.2)
+        return nn.Dense(1, name='fc_out')(h)[:, 0]   # (B,) scalar predictions
+
+
+def ctr_adv_disc_loss(
+    adv_params: Dict,
+    adversary: nn.Module,
+    z_heart_pooled: jnp.ndarray,
+    ctr_gt: jnp.ndarray,
+    has_mask: jnp.ndarray,
+) -> Tuple[jnp.ndarray, jnp.ndarray]:
+    """Adversary step: minimise L1 CTR prediction error from z_heart.
+
+    z_heart_pooled should be stop_gradient'd at the call site so that
+    only the adversary params receive gradient here.
+
+    Returns: (loss scalar, mae scalar)
+    """
+    pred = adversary.apply({'params': adv_params}, z_heart_pooled)   # (B,)
+    l1 = jnp.abs(pred - ctr_gt)
+    n_valid = jnp.maximum(jnp.sum(has_mask), 1.0)
+    loss = jnp.sum(l1 * has_mask) / n_valid
+    return loss, loss  # loss == mae for L1
+
+
+def ctr_adv_confusion_loss(
+    adv_params: Dict,
+    adversary: nn.Module,
+    z_heart_pooled: jnp.ndarray,
+) -> jnp.ndarray:
+    """VAE encoder step: push adversary predictions toward uninformative midpoint.
+
+    Loss = mean((predict(z_heart) - 0.5)^2). adv_params must be frozen
+    (stop_gradient applied at the call site) so gradient flows only through
+    z_heart_pooled back to the encoder, discouraging CTR encoding in z_heart.
+    """
+    pred = adversary.apply({'params': adv_params}, z_heart_pooled)   # (B,)
+    return jnp.mean(jnp.square(pred - 0.5))
+
+
+# ============================================================================
 # Bbox Attention Supervision  (Objective 1 — spatial)
 # ============================================================================
 

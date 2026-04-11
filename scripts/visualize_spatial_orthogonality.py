@@ -253,8 +253,7 @@ def plot_pair(bboxes_a: list, bboxes_b: list,
         ax.axvline(v, color='grey', lw=0.5, ls='--', alpha=0.4)
     ax.set_xlim(0, 1); ax.set_ylim(1, 0)
     ax.set_xlabel("Normalised x  (left → right)", fontsize=9)
-    label = 'spatially distinct ✓' if bc < 0.55 else 'moderate–high overlap'
-    ax.set_title(f"Overlay — Spatial Orthogonality\nBhattacharyya = {bc:.3f}  ({label})",
+    ax.set_title("Overlay",
                  fontsize=11, fontweight='bold', pad=8)
     ax.legend(handles=[
         Line2D([0],[0], color='darkred',  lw=2, marker='+', ms=8, label=name_a),
@@ -262,10 +261,8 @@ def plot_pair(bboxes_a: list, bboxes_b: list,
     ], fontsize=8, loc='lower right', framealpha=0.8)
 
     fig.suptitle(
-        f"Spatial Orthogonality: {name_a}  vs  {name_b}\n"
-        "Aggregate annotation density — non-overlapping hotspots justify "
-        "independent latent heads",
-        fontsize=11, y=1.03,
+        f"Aggregate annotation density: {name_a}  vs  {name_b}",
+        fontsize=12, y=1.02,
     )
     output.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(str(output), dpi=150, bbox_inches='tight')

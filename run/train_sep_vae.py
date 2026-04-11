@@ -150,6 +150,29 @@ def parse_args():
                    help="Fraction of total epochs after which V3 common_out/heart_in activate.")
     p.add_argument("--v3_ctr_start_frac",    type=float, default=0.30,
                    help="Fraction of total epochs after which V3 CTR supervision activates.")
+    p.add_argument("--v3_sep_start_frac",    type=float, default=0.40,
+                   help="Fraction of total epochs after which V3 separation losses activate "
+                        "(FactorVAE TC, SupCon on z_heart, conditional KL, CTR adversary). "
+                        "M4 stage. Must be >= v3_ctr_start_frac.")
+    p.add_argument("--v3_quality_start_frac", type=float, default=0.60,
+                   help="Fraction of total epochs after which V3 quality losses activate "
+                        "(perceptual, GAN — future). M5 stage placeholder.")
+    p.add_argument("--v3_split_rec_start_frac", type=float, default=0.0,
+                   help="Epoch fraction at which split reconstruction begins warming up. "
+                        "0 = disabled (use soft-composite l_rec throughout). "
+                        "Recommended: set after the full curriculum is active, e.g. 0.7.")
+    p.add_argument("--v3_split_rec_warmup_epochs", type=int, default=10,
+                   help="Number of epochs over which split_rec_weight ramps linearly from "
+                        "0 → 1 after v3_split_rec_start_frac is reached.")
+    p.add_argument("--v3_boundary_sigma",    type=float, default=8.0,
+                   help="Gaussian sigma (pixels) for the soft boundary blending region in "
+                        "split reconstruction. Controls the width of the transition zone "
+                        "between heart-branch and common-branch responsibility. "
+                        "~2*sigma pixels wide in practice (default 8 → ~16 px band).")
+    p.add_argument("--weight_ctr_adv",       type=float, default=0.0,
+                   help="Weight for CTR decorrelation adversary confusion loss (V3 only). "
+                        "Prevents z_heart from encoding heart size, forcing it through s_ctr. "
+                        "Activated in M4 alongside weight_mi_factor. 0=disabled.")
     p.add_argument("--chexmask_csv",         type=str,   default=None,
                    help="Path to CheXmask VinDr-CXR_preprocessed.csv for mask supervision. "
                         "If None, mask supervision is disabled. (D5+)")
@@ -835,33 +858,91 @@ def _epoch_fraction_to_start(total_epochs: int, frac: float) -> int:
 
 
 def build_v3_curriculum_cfg(base_cfg, epoch: int, total_epochs: int, args):
-    """Stage V3 losses by epoch while keeping the architecture fixed."""
+    """Stage V3 losses by epoch while keeping the architecture fixed.
+
+    Stages:
+      M0  rec + KL only
+      M1  + alpha mask supervision
+      M2  + common_out / heart_in branch reconstruction
+      M3  + CTR regression + CTR adversary
+      M4  + FactorVAE TC + SupCon on z_heart + conditional KL
+      M5  quality placeholder (perceptual / GAN — future)
+    """
+    # ── Split-rec warmup schedule (shared by both curriculum and no-curriculum) ─
+    split_rec_start_frac = float(getattr(args, 'v3_split_rec_start_frac', 0.0))
+    split_rec_warmup_eps = max(1, int(getattr(args, 'v3_split_rec_warmup_epochs', 10)))
+    if split_rec_start_frac > 0.0:
+        split_rec_start_ep = _epoch_fraction_to_start(total_epochs, split_rec_start_frac)
+        if epoch < split_rec_start_ep:
+            split_rec_weight = 0.0
+        else:
+            split_rec_weight = min(1.0, float(epoch - split_rec_start_ep) / split_rec_warmup_eps)
+    else:
+        split_rec_start_ep = None
+        split_rec_weight   = 0.0
+
     if not args.v3_curriculum:
-        return base_cfg, {
+        cfg_no_cur = SepVAEV3LossConfig(
+            weight_rec=base_cfg.weight_rec,
+            weight_kl_common=base_cfg.weight_kl_common,
+            weight_kl_heart=base_cfg.weight_kl_heart,
+            weight_alpha=base_cfg.weight_alpha,
+            weight_common_out=base_cfg.weight_common_out,
+            weight_heart_in=base_cfg.weight_heart_in,
+            weight_ctr=base_cfg.weight_ctr,
+            kl_free_bits=base_cfg.kl_free_bits,
+            weight_mi_factor=base_cfg.weight_mi_factor,
+            weight_heart_supcon=base_cfg.weight_heart_supcon,
+            supcon_temperature=base_cfg.supcon_temperature,
+            use_conditional_kl_heart=base_cfg.use_conditional_kl_heart,
+            sigma_inactive=base_cfg.sigma_inactive,
+            weight_ctr_adv=base_cfg.weight_ctr_adv,
+            split_rec_weight=split_rec_weight,
+            boundary_sigma=base_cfg.boundary_sigma,
+        )
+        return cfg_no_cur, {
             'curriculum/v3_enabled': 0.0,
-            'curriculum/v3_stage_index': 3.0,
+            'curriculum/v3_stage_index': 5.0,
             'curriculum/v3_alpha_active': 1.0,
             'curriculum/v3_parts_active': 1.0,
             'curriculum/v3_ctr_active': 1.0,
+            'curriculum/v3_sep_active': 1.0,
             'curriculum/v3_alpha_weight': float(base_cfg.weight_alpha),
             'curriculum/v3_common_out_weight': float(base_cfg.weight_common_out),
             'curriculum/v3_heart_in_weight': float(base_cfg.weight_heart_in),
             'curriculum/v3_ctr_weight': float(base_cfg.weight_ctr),
+            'curriculum/v3_mi_weight': float(base_cfg.weight_mi_factor),
+            'curriculum/v3_supcon_weight': float(base_cfg.weight_heart_supcon),
+            'curriculum/v3_ctr_adv_weight': float(base_cfg.weight_ctr_adv),
+            'curriculum/split_rec_weight': split_rec_weight,
         }, "full"
 
-    alpha_start = _epoch_fraction_to_start(total_epochs, args.v3_alpha_start_frac)
-    parts_start = _epoch_fraction_to_start(total_epochs, args.v3_parts_start_frac)
-    ctr_start = _epoch_fraction_to_start(total_epochs, args.v3_ctr_start_frac)
-    parts_start = max(parts_start, alpha_start)
-    ctr_start = max(ctr_start, parts_start)
+    alpha_start   = _epoch_fraction_to_start(total_epochs, args.v3_alpha_start_frac)
+    parts_start   = _epoch_fraction_to_start(total_epochs, args.v3_parts_start_frac)
+    ctr_start     = _epoch_fraction_to_start(total_epochs, args.v3_ctr_start_frac)
+    sep_start     = _epoch_fraction_to_start(total_epochs, getattr(args, 'v3_sep_start_frac', 0.40))
+    quality_start = _epoch_fraction_to_start(total_epochs, getattr(args, 'v3_quality_start_frac', 0.60))
+    # Enforce monotonic ordering
+    parts_start   = max(parts_start,   alpha_start)
+    ctr_start     = max(ctr_start,     parts_start)
+    sep_start     = max(sep_start,     ctr_start)
+    quality_start = max(quality_start, sep_start)
 
-    alpha_active = float(epoch >= alpha_start)
-    parts_active = float(epoch >= parts_start)
-    ctr_active = float(epoch >= ctr_start)
+    alpha_active   = float(epoch >= alpha_start)
+    parts_active   = float(epoch >= parts_start)
+    ctr_active     = float(epoch >= ctr_start)
+    sep_active     = float(epoch >= sep_start)
+    quality_active = float(epoch >= quality_start)
 
     stage_name = "m0_rec_kl"
     stage_index = 0.0
-    if ctr_active > 0.5:
+    if quality_active > 0.5:
+        stage_name = "m5_quality"
+        stage_index = 5.0
+    elif sep_active > 0.5:
+        stage_name = "m4_sep"
+        stage_index = 4.0
+    elif ctr_active > 0.5:
         stage_name = "m3_ctr"
         stage_index = 3.0
     elif parts_active > 0.5:
@@ -880,6 +961,16 @@ def build_v3_curriculum_cfg(base_cfg, epoch: int, total_epochs: int, args):
         weight_heart_in=base_cfg.weight_heart_in * parts_active,
         weight_ctr=base_cfg.weight_ctr * ctr_active,
         kl_free_bits=base_cfg.kl_free_bits,
+        # M4 — separation mechanisms
+        weight_mi_factor=base_cfg.weight_mi_factor * sep_active,
+        weight_heart_supcon=base_cfg.weight_heart_supcon * sep_active,
+        supcon_temperature=base_cfg.supcon_temperature,
+        use_conditional_kl_heart=(base_cfg.use_conditional_kl_heart and sep_active > 0.5),
+        sigma_inactive=base_cfg.sigma_inactive,
+        weight_ctr_adv=base_cfg.weight_ctr_adv * sep_active,
+        # Split reconstruction warmup
+        split_rec_weight=split_rec_weight,
+        boundary_sigma=base_cfg.boundary_sigma,
     )
     logs = {
         'curriculum/v3_enabled': 1.0,
@@ -887,13 +978,19 @@ def build_v3_curriculum_cfg(base_cfg, epoch: int, total_epochs: int, args):
         'curriculum/v3_alpha_active': alpha_active,
         'curriculum/v3_parts_active': parts_active,
         'curriculum/v3_ctr_active': ctr_active,
+        'curriculum/v3_sep_active': sep_active,
         'curriculum/v3_alpha_weight': float(cfg.weight_alpha),
         'curriculum/v3_common_out_weight': float(cfg.weight_common_out),
         'curriculum/v3_heart_in_weight': float(cfg.weight_heart_in),
         'curriculum/v3_ctr_weight': float(cfg.weight_ctr),
+        'curriculum/v3_mi_weight': float(cfg.weight_mi_factor),
+        'curriculum/v3_supcon_weight': float(cfg.weight_heart_supcon),
+        'curriculum/v3_ctr_adv_weight': float(cfg.weight_ctr_adv),
         'curriculum/v3_alpha_start_epoch': float(alpha_start),
         'curriculum/v3_parts_start_epoch': float(parts_start),
         'curriculum/v3_ctr_start_epoch': float(ctr_start),
+        'curriculum/v3_sep_start_epoch': float(sep_start),
+        'curriculum/split_rec_weight': split_rec_weight,
     }
     return cfg, logs, stage_name
 
@@ -924,12 +1021,8 @@ def main():
         disabled_fields = []
         if args.use_bbox_cross_attn:
             disabled_fields.append('use_bbox_cross_attn')
-        if args.weight_mi_factor > 0.0:
-            disabled_fields.append('weight_mi_factor')
         if args.weight_bbox_attn > 0.0:
             disabled_fields.append('weight_bbox_attn')
-        if args.weight_cardio_supcon > 0.0:
-            disabled_fields.append('weight_cardio_supcon')
         if args.weight_perceptual > 0.0:
             disabled_fields.append('weight_perceptual')
         if args.weight_gan > 0.0:
@@ -939,12 +1032,12 @@ def main():
         if args.weight_masked_rec > 0.0:
             disabled_fields.append('weight_masked_rec')
         if disabled_fields:
-            print("V3 disables legacy bbox/MI/GAN/perceptual paths; ignoring: "
+            print("V3 disables legacy bbox/perceptual/GAN paths; ignoring: "
                   + ", ".join(disabled_fields))
+        # Note: weight_mi_factor and weight_cardio_supcon are now active for V3
+        #       via the hybrid separation stack — do NOT zero them here.
         args.use_bbox_cross_attn = False
-        args.weight_mi_factor = 0.0
         args.weight_bbox_attn = 0.0
-        args.weight_cardio_supcon = 0.0
         args.weight_perceptual = 0.0
         args.weight_gan = 0.0
         args.weight_tv = 0.0
@@ -1220,6 +1313,21 @@ def main():
     else:
         print("FactorDiscriminator: disabled (weight_mi_factor=0)")
 
+    # ── CTR decorrelation adversary (V3 only) ─────────────────────────────────
+    use_ctr_adv = IS_V3 and getattr(args, 'weight_ctr_adv', 0.0) > 0.0
+    ctr_adversary = None
+    ctr_adv_state = None
+    if use_ctr_adv:
+        from losses.sep_vae_losses import CTRAdversary
+        ctr_adversary = CTRAdversary(hidden_dim=64)
+        rng, ctr_adv_rng = jax.random.split(rng)
+        ctr_adv_vars = ctr_adversary.init(ctr_adv_rng, jnp.ones((1, args.z_channels_disease)))
+        ctr_adv_params_init = ctr_adv_vars['params']
+        n_ctr_adv = sum(p.size for p in jax.tree_util.tree_leaves(ctr_adv_params_init))
+        print(f"CTRAdversary parameters: {n_ctr_adv:,}")
+    else:
+        print("CTRAdversary: disabled (weight_ctr_adv=0 or not V3)")
+
     # ── Optimizer ─────────────────────────────────────────────────────────────
     if not IS_V1:
         # Single AdamW — V2/V3 are trained end-to-end without a frozen CheSS trunk.
@@ -1265,6 +1373,16 @@ def main():
         )
         disc_state = TrainState.create(apply_fn=None, params=disc_params, tx=tx_disc)
         print(f"Disc optimizer: Adam  (lr={args.lr_disc})")
+
+    if use_ctr_adv:
+        tx_ctr_adv = optax.chain(
+            optax.clip_by_global_norm(args.grad_clip),
+            optax.adam(learning_rate=args.lr_disc),
+        )
+        ctr_adv_state = TrainState.create(
+            apply_fn=None, params=ctr_adv_params_init, tx=tx_ctr_adv,
+        )
+        print(f"CTR Adv optimizer: Adam  (lr={args.lr_disc})")
 
     # ── PatchGAN discriminator (D5) ───────────────────────────────────────────
     # NLayerDiscriminator operates in image space (x_real vs x_rec). Frozen
@@ -1422,6 +1540,24 @@ def main():
                 if not _pd_shapes_ok:
                     print("  [patch_disc restore] param shapes changed → fresh optimizer state")
                 patch_disc_state = patch_disc_state.replace(params=restored_pd_params)
+        if use_ctr_adv and ctr_adv_state is not None and 'ctr_adv_params' in ckpt:
+            restored_ca_params = _merge_params(ctr_adv_state.params, ckpt['ctr_adv_params'])
+            _ckpt_ca_leaves  = jax.tree_util.tree_leaves(
+                jax.tree_util.tree_map(lambda x: jnp.array(x).shape, ckpt['ctr_adv_params']))
+            _fresh_ca_leaves = jax.tree_util.tree_leaves(
+                jax.tree_util.tree_map(lambda x: x.shape, restored_ca_params))
+            _ca_shapes_ok = (_ckpt_ca_leaves == _fresh_ca_leaves)
+            if _ca_shapes_ok and 'ctr_adv_opt_state' in ckpt:
+                try:
+                    restored_ca_opt = from_state_dict(ctr_adv_state.opt_state, ckpt['ctr_adv_opt_state'])
+                    ctr_adv_state = ctr_adv_state.replace(params=restored_ca_params,
+                                                          opt_state=restored_ca_opt)
+                except (ValueError, KeyError):
+                    ctr_adv_state = ctr_adv_state.replace(params=restored_ca_params)
+            else:
+                if not _ca_shapes_ok:
+                    print("  [ctr_adv restore] param shapes changed → fresh optimizer state")
+                ctr_adv_state = ctr_adv_state.replace(params=restored_ca_params)
         if vae_batch_stats and 'vae_batch_stats' in ckpt:
             vae_batch_stats = jax.tree_util.tree_map(jnp.array, ckpt['vae_batch_stats'])
         if 'ema_params' in ckpt:
@@ -1454,6 +1590,16 @@ def main():
             weight_heart_in=args.weight_heart_in,
             weight_ctr=getattr(args, 'weight_ctr_reg', 0.0),
             kl_free_bits=args.kl_free_bits,
+            # V2 separation mechanisms (enabled via CLI args)
+            weight_mi_factor=args.weight_mi_factor,
+            weight_heart_supcon=args.weight_cardio_supcon,
+            supcon_temperature=args.supcon_temperature,
+            use_conditional_kl_heart=(args.sigma_inactive < 1.0),
+            sigma_inactive=args.sigma_inactive,
+            weight_ctr_adv=getattr(args, 'weight_ctr_adv', 0.0),
+            # Split reconstruction — weight starts at 0 and is ramped by curriculum
+            split_rec_weight=0.0,
+            boundary_sigma=getattr(args, 'v3_boundary_sigma', 8.0),
         )
         print(f"\nBase loss weights: rec={loss_cfg_base.weight_rec}  "
               f"kl_c={loss_cfg_base.weight_kl_common}  "
@@ -1541,6 +1687,19 @@ def main():
         )
         return disc_state_arg.apply_gradients(grads=grads), d_loss, d_acc
 
+    @jax.jit
+    def ctr_adv_step(ctr_adv_state_arg, z_heart_pooled, ctr_gt, has_mask_arg):
+        """Update CTR adversary to minimise CTR prediction error from z_heart."""
+        from losses.sep_vae_losses import ctr_adv_disc_loss as _ctr_adv_disc_loss
+        def _loss_fn(adv_params):
+            return _ctr_adv_disc_loss(
+                adv_params, ctr_adversary, z_heart_pooled, ctr_gt, has_mask_arg,
+            )
+        (adv_loss, adv_mae), grads = jax.value_and_grad(_loss_fn, has_aux=True)(
+            ctr_adv_state_arg.params
+        )
+        return ctr_adv_state_arg.apply_gradients(grads=grads), adv_loss, adv_mae
+
     _r1_weight = args.disc_r1_penalty  # captured in closure; avoids Python overhead in jit
 
     @jax.jit
@@ -1578,9 +1737,9 @@ def main():
         )
         return patch_disc_state_arg.apply_gradients(grads=grads), pd_loss, pd_acc
 
-    @partial(jax.jit, static_argnums=(6,))
+    @partial(jax.jit, static_argnums=(7,))
     def vae_step(vae_state_arg, batch, disc_params_frozen, patch_disc_params_frozen,
-                 key, kl_anneal, loss_cfg_arg):
+                 ctr_adv_params_frozen, key, kl_anneal, loss_cfg_arg):
         """Update VAE with all losses including FactorVAE MI and PatchGAN (both discs frozen).
         bbox_full and has_bbox are pre-assembled in the batch dict by the train loop."""
         bbox_arg           = batch.get('bbox_full')       # (2B, 4) or None
@@ -1594,6 +1753,10 @@ def main():
             if IS_V3:
                 total_loss, logs, z_c, z_ca, x_rec = sepvae_v3_loss(
                     sepvae, params, batch, key, loss_cfg_arg, kl_anneal=kl_anneal,
+                    disc_params=disc_params_frozen,
+                    discriminator=discriminator,
+                    ctr_adv_params=ctr_adv_params_frozen,
+                    ctr_adversary=ctr_adversary,
                 )
             else:
                 total_loss, logs, z_c, z_ca, x_rec = sepvae_loss(
@@ -1758,6 +1921,29 @@ def main():
                 disc_acc = jnp.float32(0.0)
                 disc_params_frozen = None
 
+            # CTR adversary step (V3 only) — reuses z_ca_curr from get_pooled_latents above
+            if use_ctr_adv and ctr_adv_state is not None:
+                if not (use_factor_disc and disc_state is not None):
+                    # get_pooled_latents was not called above; call it now
+                    z_c_curr, z_ca_curr = get_pooled_latents(
+                        vae_state.params,
+                        x_full,
+                        batch.get('bbox_full'),
+                        batch.get('has_bbox_query'),
+                        heart_mask=batch.get('heart_mask'),
+                    )
+                ctr_adv_state, ctr_adv_loss, ctr_adv_mae = ctr_adv_step(
+                    ctr_adv_state,
+                    jax.lax.stop_gradient(z_ca_curr),
+                    batch['ctr'],
+                    batch['has_mask'],
+                )
+                ctr_adv_params_frozen = jax.lax.stop_gradient(ctr_adv_state.params)
+            else:
+                ctr_adv_loss = jnp.float32(0.0)
+                ctr_adv_mae  = jnp.float32(0.0)
+                ctr_adv_params_frozen = None
+
             phase_local_step = global_step - phase_start_global_step
             gan_active = use_patch_disc and patch_disc_state is not None and phase_local_step >= args.gan_start_step
             patch_disc_params_frozen = (
@@ -1767,7 +1953,7 @@ def main():
             # Step 2: VAE update on the same batch.
             vae_state, logs, _, _, x_rec = vae_step(
                 vae_state, batch, disc_params_frozen, patch_disc_params_frozen,
-                key_vae, kl_anneal, epoch_loss_cfg
+                ctr_adv_params_frozen, key_vae, kl_anneal, epoch_loss_cfg
             )
 
             # Step 3: PatchGAN discriminator update on the current reconstruction.
@@ -1788,6 +1974,8 @@ def main():
                 'metrics/disc_acc':       disc_acc,
                 'loss/patch_disc':        patch_disc_loss,
                 'metrics/patch_disc_acc': patch_disc_acc,
+                'loss/ctr_adv':           ctr_adv_loss,
+                'metrics/ctr_adv_mae':    ctr_adv_mae,
             } | v3_curriculum_logs
             epoch_logs.append(logs)
             last_batch = batch
@@ -1799,12 +1987,13 @@ def main():
                           f"rec={float(logs['loss/reconstruction']):.4f}  "
                           f"kl={float(logs['loss/kl_total']):.4f}  "
                           f"alpha={float(logs['loss/alpha_mask']):.4f}  "
-                          f"common_out={float(logs['loss/common_out']):.4f}  "
                           f"heart_in={float(logs['loss/heart_in']):.4f}  "
                           f"ctr={float(logs['loss/ctr']):.4f}  "
+                          f"mi={float(logs['loss/mi_factor']):.4f}  "
+                          f"supcon={float(logs['loss/heart_supcon']):.4f}  "
+                          f"ctr_adv={float(logs['loss/ctr_adv_confuse']):.4f}  "
+                          f"D_acc={float(logs['metrics/disc_acc']):.2f}  "
                           f"dice={float(logs['metrics/alpha_dice']):.3f}  "
-                          f"iou={float(logs['metrics/alpha_iou']):.3f}  "
-                          f"alpha_mean={float(logs['metrics/alpha_mean']):.2f}  "
                           f"heart_n={float(logs['metrics/z_heart_norm_normal']):.2f}  "
                           f"heart_c={float(logs['metrics/z_heart_norm_cardio']):.2f}")
                 else:
@@ -1876,6 +2065,9 @@ def main():
             if use_patch_disc and patch_disc_state is not None:
                 ckpt_data['patch_disc_params'] = patch_disc_state.params
                 ckpt_data['patch_disc_opt_state'] = patch_disc_state.opt_state
+            if use_ctr_adv and ctr_adv_state is not None:
+                ckpt_data['ctr_adv_params'] = ctr_adv_state.params
+                ckpt_data['ctr_adv_opt_state'] = ctr_adv_state.opt_state
             with open(ckpt_path, 'wb') as f:
                 f.write(to_bytes(ckpt_data))
             print(f"  Saved: {ckpt_path}")
