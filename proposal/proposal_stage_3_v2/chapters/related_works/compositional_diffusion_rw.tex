@@ -1,0 +1,77 @@
+% !TEX root = ../../proposal.tex
+
+\section{Compositional Generative Models}
+\label{sec:compositionality_models}
+
+% Compositionality has long been regarded as a fundamental property of intelligence both in human cognition and machine learning—referring to the ability to construct complex representations from simpler, reusable components.  
+% In generative modeling, this principle manifests as the capacity to generate new, coherent outputs by flexibly combining independent concepts, such as objects, attributes, or relations, even when such combinations were unseen during training.  
+% Recent research has approached this goal through a variety of frameworks ranging from disentangled representation learning \citep{wang2024disentangled} and object-centric models \citep{majellaro2024explicitly} to energy-based \citep{song2021train} and diffusion-based generative systems \citep{NEURIPS2020_4c5bcfec}—each offering unique insights into how compositional structures may be represented, combined, and controlled.
+
+Early approaches decomposed data into disentangled factors of variation, learning representations in a continuous latent space where each dimension corresponds to a semantic factor \citep{higgins2017scan,generative_models_visually_grounded_imagination_2018}.  
+Such factorized representations allowed interpretable control but were limited by their fixed latent dimensionality, which restricted the ability to dynamically introduce or recombine new factors.  
+Complementary efforts in spatial decomposition treated images as structured collections of independent object slots \citep{steenkiste2019a,multi_object_representation_learning_iterative_variational_inference_2019}.  
+These methods excelled in representing multi-object scenes but often failed to model the interactions or dependencies between objects, which are crucial for understanding relational structure.  
+% Despite these limitations, these approaches established the foundation for compositional reasoning in generative models demonstrating that meaningful control arises when latent representations align with distinct conceptual factors.
+
+Energy-Based Models (EBMs) introduced a unifying probabilistic formulation for compositionality.  
+Rather than relying on explicit latent variables, EBMs define an energy function $E_\theta(\mathbf{x})$ that maps an input $\mathbf{x}$ to a scalar energy value, with lower energies corresponding to more likely configurations.  
+Following the product-of-experts formulation introduced by \citet{product_of_experts}, independent energy functions can be combined to represent conjunctions of concepts:
+\[
+p(\mathbf{x} \mid c_1, c_2, \dots, c_n) \propto \exp\!\Big(-\sum_i E_\theta(\mathbf{x} \mid c_i)\Big).
+\]
+This additive composition provides a mathematically elegant mechanism for representing logical operations such as conjunction (AND), disjunction (OR), and negation (NOT) through energy summation or inversion.  
+Later works such as \citet{shazeer2017outrageously,multi_object_representation_learning_iterative_variational_inference_2019} formalized the notion that multiple energy landscapes can be recursively combined to model increasingly complex visual structures, while \citet{NEURIPS2020_49856ed4} demonstrated how Markov Chain Monte Carlo (MCMC) sampling on the composed energy surface enables the generation of images consistent with multiple attributes simultaneously.
+
+% Building on these principles, \citet{NEURIPS2020_49856ed4} demonstrated that EBMs can compose concepts probabilistically by defining each semantic concept as an independent energy function.  
+% By combining these energy functions, they showed that images satisfying complex logical relationships such as conjunctions, disjunctions, or negations of attributes could be generated.  
+% Their work revealed that compositionality need not rely on explicit latent variables or conditional encoders. 
+% Instead, it can emerge from the algebra of probability distributions governed by energy functions.
+% This marked an important theoretical shift in generative modeling: compositionality became a property of probabilistic combination, not architectural specialization.
+
+% \paragraph{Motivation and Challenges.}
+% Traditional controllable generation relies on conditional models, in which specific attributes or modalities are embedded during training.  
+% While such models allow fine-grained control, they suffer two key drawbacks:  
+% (i) the conditioning attributes are fixed and predefined, limiting extensibility to new concepts; and  
+% (ii) training new conditional models for novel attributes is computationally costly and often results in degraded quality compared to unconditional models.  
+% To address these limitations, recent research has turned to compositional frameworks that enable control at inference time—allowing models to combine pretrained concept experts dynamically, without retraining.
+
+\paragraph{Diffusion Models as Energy-Based Systems.}
+A central insight underpinning recent advances is that diffusion models can be interpreted as a class of energy-based models \citep{du2023reduce}.  
+The score function $\nabla_\mathbf{x}\log p(\mathbf{x})$ of a diffusion model defines a gradient field over data space, which, like an energy landscape, governs the movement of samples toward regions of high likelihood.  
+% This equivalence suggests that multiple pretrained diffusion models—each capturing a specific concept—can be combined through additive or multiplicative operations on their scores, mirroring the logic of product-of-experts EBMs.  
+% This theoretical bridge between EBMs and diffusion processes provides a foundation for compositional sampling, where logical operations can be applied directly in the score domain.
+
+Recent work has sought to operationalize compositionality within the framework of diffusion models.  
+\citet{liu2022compositional} propose a structured approach in which separately trained diffusion models, each modeling a distinct component of an image, are algebraically combined at inference time.  
+By viewing diffusion models as energy-based systems, they define compositional operators, such as logical conjunction (AND) and negation (NOT), that allow for flexible test-time control without additional training.  
+This formulation enables zero-shot compositional generalization, allowing the model to generate coherent images that represent novel concept combinations far beyond its training distribution.
+
+% A parallel line of work by \citet{nie2021controllable} introduces latent-space energy-based models for controllable generation.  
+% Given a pretrained generator, their approach requires training only a lightweight classifier whose output acts as an energy function over latent codes.  
+% This formulation reduces the training complexity of conditional generative models while retaining strong compositional control.  
+% Sampling is achieved via ordinary differential equation (ODE) solvers rather than traditional Langevin dynamics \citep{NEURIPS2019_3001ef25, vincent_score_matching_2011}, providing a more efficient and stable inference process.  
+
+% Their results demonstrate zero-shot generation of unseen attribute combinations, illustrating that compositional reasoning can emerge from latent-space energy interactions.
+
+% Expanding upon relational compositionality, \citet{NEURIPS2021_c3008b2c} observe that large text-guided diffusion models such as CLIP and DALL-E struggle to encode relational structure (e.g., spatial or causal relationships between objects) due to their reliance on fixed-size text embeddings.  
+% They address this by factorizing scene representations into individual relations, each modeled as an unnormalized density or energy function, which can then be recombined to generate scenes with multiple relational dependencies.  
+% This approach bridges the gap between language compositionality and visual compositionality, allowing diffusion models to represent structured, relational interactions explicitly.
+
+More recently, \citet{skreta2024superposition} proposed a framework for combining pretrained diffusion models under the principle of \emph{superposition}.  
+Their algorithm, \textsc{SuperDiff}, leverages a scalable Itô density estimator for the diffusion stochastic differential equation (SDE), allowing for adaptive reweighting of log-likelihoods during composition.  
+This method enables logical operations such as conjunction and disjunction between pretrained models directly during inference, without retraining or fine-tuning.  
+The authors further demonstrate that the superposition mechanism permits fine-grained temperature control, balancing diversity and coherence in composed samples.  
+% This development represents a significant practical step toward modular generative reasoning in the diffusion paradigm.
+
+% Complementary theoretical work by \citet{mechanisms-of-projective-composition} formalizes the mathematical conditions under which compositional diffusion models are well-defined.  
+% They introduce the notion of \emph{projective composition}, providing criteria for when linear combinations of score functions yield consistent generative behavior.  
+% Their analysis clarifies why certain empirical compositions succeed or fail, and proposes a heuristic for predicting composition quality based on score alignment.  
+% Together, these results establish the theoretical foundation for compositional inference within diffusion models and offer a roadmap for principled extensions.
+
+% \section{Discussion and Outlook}
+% \label{sec:discussion_outlook}
+
+% The evolution from disentangled latent representations to compositional EBMs and finally to composable diffusion models reflects a continuous movement toward modular, interpretable generative systems.  
+% EBMs introduced compositionality through additive energy combinations, while diffusion models extended this concept to stochastic trajectories governed by score functions.  
+% Both frameworks share a unifying probabilistic interpretation: compositional generation arises from combining distributions or potentials corresponding to distinct conceptual factors.  
+% This convergence has given rise to models capable of synthesizing semantically rich and logically consistent scenes, supporting continual learning and zero-shot generalization.  

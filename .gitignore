@@ -4,7 +4,7 @@ runs_baseline_ldm/
 
 # ── W&B artifacts ─────────────────────────────────────────────────────────────
 wandb/
-
+proposal/proposal_stage_3_v1/
 # ── SLURM / training logs ─────────────────────────────────────────────────────
 logs/
 *.log
@@ -24,6 +24,7 @@ __pycache__/
 *.jpeg
 *.svg
 *.pyd
+*.pdf
 *.egg-info/
 dist/
 build/

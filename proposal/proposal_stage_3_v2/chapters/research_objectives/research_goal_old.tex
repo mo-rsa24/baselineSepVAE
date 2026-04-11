@@ -1,0 +1,29 @@
+% !TEX root = ../../proposal.tex
+
+\section{Research Goal}
+\label{sec:research_objectives_research_goal}
+Todo: look at markdowns
+
+The main research goals are:
+
+\begin{enumerate}
+    \item \textbf{Characterize The Gap Between Logical and Semantic Composability:}
+    To identify and formalise the conditions under which
+    pretrained diffusion models can be composed coherently. This goal is focused on characterising the gap between logical and semantic composability in generative models, and identify regimes where this gap is significant.
+    This includes developing a unified empirical framework that explains
+    when and why pretrained generative models---whether energy-based product of experts, mixtures or density-based (e.g., SuperDiff)---yield
+    \emph{semantically meaningful results} and when they fail to do so.
+    We seek to systematically characterise the behaviour, success and failure modes of existing compositional operators and
+    provide a principled approach to measuring and mitigating this gap.
+    Closing this gap would enable composable pretrained diffusion during inference to generate complex scenes that were unseen during training and
+    reduce the need for complex models and large amounts of training data.
+    \item \textbf{Practical Utility Of Compositional Capabilities:}
+    To demonstrate that logical composition can be used to generate novel and semantically meaningful outputs that are not easily achievable through large models.
+    We restrict our domain to medical images as it captures unique aspects that are complex and well-suited for demonstrating how to apply compositional diffusion models in practice.
+    The goal is to demonstrate the practical utility of composition by representing disease conditions as concepts and generating ecologically valid co-morbid disease patterns on a single x-ray by composing pretrained diffusion models during inference.
+    This is very helpful in low-resource settings where we might have datasets that have specific disease patterns occuring in isolation and no presentations of their co-morbid patterns (such as silico-tb). This enables us to
+    generate co-morbid diseases without seeing them both present during training. The utility extends beyond medical images.
+    \item \textbf{Closing The Gap Between Logical and Semantic Composability:}
+    To close the gap and produce semantically meaningful logical compositions, we represent the latent space as a riemannian manifold and
+    travel along geodescics during sampling to prevent logical composition from falling off the data manifold.
+\end{enumerate}

@@ -1,0 +1,21 @@
+% !TEX root = ../../proposal.tex
+
+\section{Research Hypotheses}
+\label{sec:research_objectives_research_hypothesis}
+
+The main hypotheses of this proposal are:
+\begin{itemize}
+    \item \textbf{H1 (The Composability Gap):}
+    Logical composition via score addition produces a measurable composability gap relative to semantic composition, emerging early in inference and following a principled ordering: smallest for co-occurring pairs, small-to-moderate for approximately disentangled (e.g style-content pairs) unseen pairs, large for entangled pairs, and largest for semantically competing pairs.
+    The largest-gap outcomes should be unreachable via natural-language prompting alone, confirming that logical composition steers generation along paths no single prompt can reproduce.
+
+    \item \textbf{H2 (The Representation Hypothesis):}
+    The composability gap is primarily a representation problem.
+    Holding the compositional method fixed, models with more clearly separated concept
+    representations should exhibit a smaller composability gap than models with more entangled
+    ones.
+
+    \item \textbf{H3 (The Clinical Independence Sufficiency Hypothesis):}
+    Approximate clinical independence between chest X-ray pathologies is sufficient for logical composition to generate plausible co-morbid outputs, including out-of-distribution pairings unseen during training, provided the model has learned sufficiently distinct pathology-specific representations.
+
+\end{itemize}

@@ -1,0 +1,67 @@
+% !TEX root = ../../proposal.tex
+
+\chapter{Research Plan}
+\label{chap:research_plan}
+
+\begingroup
+\small
+\setlength{\tabcolsep}{2.6pt}
+\renewcommand{\arraystretch}{1.08}
+\newcolumntype{Y}{>{\centering\arraybackslash}m{0.34cm}}
+\definecolor{planfill}{RGB}{240,128,128}
+\newcommand{\planfilled}{\cellcolor{planfill}\rule{0pt}{1.7ex}}
+\newcommand{\planempty}{\rule{0pt}{1.7ex}}
+
+\section{Time Plan}
+\vspace{-0.45em}
+{\noindent\centering
+\begin{adjustbox}{max width=\textwidth}
+\begin{tabular}{|>{\raggedright\arraybackslash}m{4.0cm}|*{35}{Y|}}
+\hline
+\multicolumn{1}{|c|}{} & \multicolumn{5}{c|}{\textbf{2024}} & \multicolumn{12}{c|}{\textbf{2025}} & \multicolumn{12}{c|}{\textbf{2026}} & \multicolumn{6}{c|}{\textbf{2027}} \\
+\hline
+\multicolumn{1}{|c|}{} & \textbf{08} & \textbf{09} & \textbf{10} & \textbf{11} & \textbf{12} & \textbf{01} & \textbf{02} & \textbf{03} & \textbf{04} & \textbf{05} & \textbf{06} & \textbf{07} & \textbf{08} & \textbf{09} & \textbf{10} & \textbf{11} & \textbf{12} & \textbf{01} & \textbf{02} & \textbf{03} & \textbf{04} & \textbf{05} & \textbf{06} & \textbf{07} & \textbf{08} & \textbf{09} & \textbf{10} & \textbf{11} & \textbf{12} & \textbf{01} & \textbf{02} & \textbf{03} & \textbf{04} & \textbf{05} & \textbf{06} \\
+\hline
+Paper Reading & \planfilled & \planfilled & \planfilled & \planfilled & \planfilled & \planfilled & \planfilled & \planfilled & \planfilled & \planfilled & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty \\
+\hline
+Writing Proposal & \planempty & \planempty & \planempty & \planempty & \planempty & \planfilled & \planfilled & \planfilled & \planfilled & \planfilled & \planfilled & \planfilled & \planfilled & \planfilled & \planfilled & \planfilled & \planfilled & \planfilled & \planfilled & \planfilled & \planfilled & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty \\
+\hline
+Phase 1 & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planfilled & \planfilled & \planfilled & \planfilled & \planfilled & \planfilled & \planfilled & \planfilled & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty \\
+\hline
+Phase 2 & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planfilled & \planfilled & \planfilled & \planfilled & \planfilled & \planfilled & \planfilled & \planfilled & \planfilled & \planfilled & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty \\
+\hline
+Phase 3 & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planfilled & \planfilled & \planfilled & \planfilled & \planfilled & \planfilled & \planfilled & \planfilled & \planfilled & \planfilled & \planfilled & \planfilled & \planempty & \planempty & \planempty \\
+\hline
+Write Thesis & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planempty & \planfilled & \planfilled & \planfilled & \planfilled & \planfilled & \planfilled & \planfilled & \planfilled & \planfilled \\
+\hline
+\end{tabular}
+\end{adjustbox}
+\par}
+\vspace{-0.8em}
+
+\section{Success Criteria}
+\vspace{-0.35em}
+\begin{itemize}[leftmargin=1.4em,itemsep=0.2em,topsep=0.25em,parsep=0pt,partopsep=0pt]
+    \item Phase~1 should deliver a stable taxonomy benchmark and trajectory-based evidence that the composability gap grows predictably from structurally easy pairs to conflicting pairs.
+    \item Phase~2 should show that better factorised latent representations improve held-out composition and reduce the gap between semantic and logical composition under a shared downstream evaluator.
+    \item Phase~3 should produce VinBigData compositions that preserve both target pathologies, remain spatially plausible, and score as credible co-morbid radiographs under external evaluation.
+    \item The full programme should end with reproducible manifests, evaluation scripts, and thesis-ready chapters that support publication and final submission.
+\end{itemize}
+\vspace{-0.8em}
+
+\section{Possible Challenges}
+\vspace{-0.35em}
+\begin{itemize}[leftmargin=1.4em,itemsep=0.2em,topsep=0.25em,parsep=0pt,partopsep=0pt]
+    \item Diffusion training, shared-noise sweeps, and repeated ablations are computationally expensive and may slow iteration on limited hardware budgets.
+    \item Composition quality can be sensitive to seeds, hyper-parameters, and representation choices, so multiple controlled runs are needed before drawing conclusions.
+    \item Real co-morbid chest X-ray cases remain scarce, which limits the strength of supervision available for the clinical phase.
+    \item Clinical validity depends partly on external classifiers and proxy realism checks, so failure analysis and specialist interpretation remain essential.
+\end{itemize}
+\vspace{-0.8em}
+\section{Limitations}
+\vspace{-0.35em}
+The main limitation of this research lies in Phase~3, which depends on the selected pathology pair being spatially distinct enough for approximate conditional-independence assumptions and factor separation to hold. Diffusion models are also computationally expensive, limiting the scale of experiments and ablations. Finally, evaluation relies on external classifiers and proxy plausibility measures, while stronger validation would require radiologist assessment of the generated co-morbid radiographs.
+\section{Conclusion}
+\vspace{-0.35em}
+This plan moves from characterising the composability gap, to testing whether better factorised representations reduce it, and finally to evaluating whether the same logic supports clinically plausible co-morbid chest X-ray synthesis. The phased structure keeps each stage tied to concrete outputs, making the overall programme feasible, cumulative, and coherent for thesis completion.
+\endgroup

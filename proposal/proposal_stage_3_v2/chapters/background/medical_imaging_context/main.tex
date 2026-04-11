@@ -1,0 +1,38 @@
+% !TEX root = ../../../proposal.tex
+
+\section{Generative Models for Chest Radiography}
+\label{sec:medical_imaging_background}
+
+\subsection{Pathology-Conditioned Synthesis}
+
+Chest radiography is a high-volume, low-cost modality central to the diagnosis of
+cardiopulmonary disease. The VinBigData dataset~\citep{nguyen2022vindr} provides
+15{,}000 posteroanterior (PA) radiographs annotated by professional radiologists
+across 14 pathological findings, following a pronounced long-tail distribution in
+which normal cases comprise 70.7\% of all images. This scarcity of annotated
+pathological cases --- and the near absence of jointly annotated co-morbid cases ---
+creates a persistent data augmentation challenge. Generative models have been
+explored as a solution: by synthesising pathology-conditioned images, they can
+supplement real training data in low-resource settings. Early work used conditional
+GANs~\citep{gan_medical_image_augmentation_2018, medical_image_synthesis_gans_2018}
+to produce disease-specific images, with demonstrated downstream benefits for
+classification in small-data regimes. More recently, latent diffusion
+models~\citep{rombach2022high} have produced higher-quality and more diverse
+radiograph synthesis, with conditioning provided by text or class embeddings. These
+monolithic conditioning approaches generate a single disease at a time; they do not
+address the problem of synthesising rare co-morbid presentations in which two or more
+pathologies must coexist coherently in the same image.
+
+\subsection{Domain-Specific Representations}
+
+General-purpose vision-language models such as CLIP are trained on natural image--text
+pairs and are not calibrated to the visual statistics of radiographs. Domain-specific
+pre-training addresses this gap. CheSS (Chest X-ray Self-supervised Contrastive
+Learning)~\citep{NEURIPS2022_123d3e81} is an encoder pre-trained on large-scale chest
+radiograph collections using a contrastive objective, producing embeddings in which
+radiologically similar images are closer than radiologically dissimilar ones.
+A domain-specific encoder provides better-calibrated similarity measurements for
+conditioning and evaluation in chest X-ray generation tasks than general-purpose
+vision encoders. In Phase~3, CheSS embeddings are used to condition the per-disease
+diffusion experts and to evaluate the radiological fidelity of composed co-morbid
+samples.

@@ -1,0 +1,257 @@
+% !TEX root = ../../proposal.tex
+
+\section{Phase 3: Compositional Generation of Co-morbid Chest X-rays}
+\label{sec:phase_3}
+This phase is the clinical extension of the representation hypothesis developed in Phases~1 and~2. 
+Phase~1 examines when logical composition fails, and Phase~2 tests whether better-separated representations improve held-out composition in a controlled environment. 
+Building on this, Phase~3 asks whether the same basic idea can be used to generate clinically plausible co-morbid chest X-rays.
+
+We study posteroanterior (PA) chest X-rays containing multiple disease conditions and treat co-morbid synthesis as an out-of-distribution composition problem. 
+The central question is whether the selected diseases are anatomically distinct enough that their effects can be represented as approximately factorized conditionals over shared anatomy. 
+Under this assumption, composition may produce clinically plausible co-morbid images even when joint cases are scarce.
+
+Evaluation focuses on pathology presence, spatial plausibility, radiological fidelity, and held-out co-morbid composition. 
+This phase matters because real co-morbid cases are rare and expensive to annotate. 
+If successful, it would show that compositional generation can help synthesise clinically plausible examples of underrepresented disease combinations.
+
+\subsection{Dataset Selection}
+This phase requires a clinical dataset with enough PA chest X-rays, reliable pathology annotations, and meaningful class imbalance to make rare co-morbidity a realistic problem. VinBigData \citep{vinbigdata-chest-xray-abnormalities-detection} Chest X-ray is well suited to this setting because it provides 15{,}000 PA radiographs with radiologist annotations across 14 findings in a strongly long-tailed distribution. Its pathology labels and bounding boxes make it suitable both for selecting a scarce pathology pair and for checking whether disease evidence remains anatomically localised.
+
+As illustrated in Figure~\ref{fig:class_dist}, the dataset is dominated by ``No finding'' cases, with the remaining pathologies spread across a pronounced long tail. This matters because disease-specific signal can easily be overwhelmed by normal anatomy if the data are used naively. For that reason, training will use balanced sampling across the selected pathologies so that rare findings are not suppressed during learning.
+
+\begin{center}
+\includegraphics[width=0.80\textwidth]{chapters/research_method/media/xray/class_distribution.png}
+\captionof{figure}{Class distribution across 15{,}000 chest X-rays in VinBigData. The dominance of ``No finding'' highlights the long-tailed nature of the dataset and motivates balanced sampling during training.}
+\label{fig:class_dist}
+\end{center}
+
+We focus on cardiomegaly and pleural thickening, where cardiomegaly primarily affects the central heart region and pleural thickening appears along the pleural boundary and lung periphery. 
+This pair is clinically plausible because both findings can co-occur in real patients, yet it remains compositionally nontrivial because their joint presentation is relatively rare and both disease effects must be represented within the same underlying chest anatomy. 
+Successful synthesis therefore requires the model to preserve shared anatomical structure while expressing each pathology distinctly, without suppression, leakage, or anatomically implausible blending.
+
+As shown in Figure~\ref{fig:cooccurrence}, each pathology occurs often enough to support separate learning, but their joint presentation is considerably less frequent: cardiomegaly appears in 2,300 images, pleural thickening in 1,981, and the two are annotated together in only 858.
+This creates a realistic low-resource co-morbidity setting in which a standard monolithic model sees many examples of each disease in isolation but far fewer examples of how they appear together.
+
+\begin{figure}[ht]
+    \centering
+    \includegraphics[width=0.77\textwidth]{chapters/research_method/media/xray/cooccurrence_heatmap_single.png}
+    \captionof{figure}{VinBigData co-occurrence and scarcity heatmap. The bright diagonal reveals individual disease prevalence, while the darker off-diagonal cells highlight the low-resource co-morbidity problem.}
+    \label{fig:cooccurrence}
+\end{figure}
+
+Figure~\ref{fig:cooccurrence} therefore defines the low-resource regime in which Phase~3 operates. The model has access to many single-disease examples but comparatively few examples of their joint presentation, so the experiment asks whether the abundant single-disease cases can be used as separate priors and composed to synthesise plausible co-morbid radiographs.
+
+\subsection{Experiment Design}
+
+\subsubsection{Preprocessing}
+
+Phase~3 begins by matching each raw DICOM radiograph to its pathology labels and bounding-box annotations. 
+VinBigData contains radiographs acquired across multiple clinical sites, so the images are first converted to a common representation before resizing and normalisation.
+This reduces nuisance variation from acquisition and makes disease-related structure more comparable across patients and clinical sites.
+
+Bounding-box annotations are then retained as weak spatial guidance. 
+They serve two purposes in the proposal. 
+First, they provide an exploratory view of where each selected pathology is typically expressed in the image. 
+As shown in Figure~\ref{fig:disease_samples}, cardiomegaly is concentrated around the enlarged cardiac silhouette in the central chest, while pleural thickening appears along the lung periphery and lower pleural margins. 
+Second, they provide weak spatial supervision during representation learning, helping align disease-related variation with the expected anatomical regions rather than letting it spread diffusely across the chest. This is intended to give the downstream diffusion model a more spatially structured latent representation.
+
+\begin{figure}[ht]
+    \centering
+        \includegraphics[width=0.55\textwidth]{chapters/research_method/media/xray/disease_samples_bbox.png}
+    \captionof{figure}{Ground-truth examples illustrating the spatial distinctness of Cardiomegaly and Pleural Thickening in VinBigData. Cardiomegaly is concentrated around the cardiac silhouette, whereas pleural thickening is expressed along the lung periphery and pleural margin.}
+    \label{fig:disease_samples}
+\end{figure}
+
+Figure~\ref{fig:disease_samples} does not by itself establish compositional separability, but it shows why this pathology pair is a plausible first test case. 
+The dominant visual evidence for the two diseases tends to occupy different anatomical substrates, which provides a basis for testing whether approximate spatial separation can be turned into a more factorised latent representation.
+
+
+\subsubsection{Conditional Assumptions}
+\label{subsec:p3_assumptions}
+In Phase~3, composition is not performed against a fully unconditional latent distribution. 
+Instead, it is performed relative to a shared anatomical scaffold \(z_c\), which is intended to capture patient-specific and acquisition-related structure common to both disease conditions. 
+The diffusion variable \(u\) then represents the residual generative state over which disease-specific variation is modeled. 
+Conditioning on \(z_c\) therefore changes the reference distribution in Bayes composition from \(p(u)\) to \(p(u \mid z_c)\): rather than combining cardiomegaly and pleural-thickening evidence over arbitrary chest X-rays, we combine them over a fixed shared anatomical context. 
+Under the assumption
+\[
+    c_1 \perp c_2 \mid (u, z_c),
+\]
+this gives
+\begin{equation}
+    p(u \mid z_c, c_1, c_2)
+    \;\propto\;
+    \frac{p(u \mid z_c, c_1)\,p(u \mid z_c, c_2)}{p(u \mid z_c)}.
+\end{equation}
+In this setting, \(c_1\) and \(c_2\) correspond to cardiomegaly and pleural thickening respectively. 
+This is not a claim that cardiomegaly and pleural thickening occur independently in clinical data. 
+Rather, it is the modelling assumption that once the shared context \(z_c\) and generative state \(u\) are fixed, the two disease labels can be treated as approximately independent for the purpose of composition.
+The three assumptions below motivate when this conditional independence is plausible: 
+the selected diseases are approximately separable in practice, shared anatomy can be factorised from disease-specific effects, and under that factorisation the remaining disease conditionals can be treated as approximately independent given \((u,z_c)\).
+\begin{enumerate}
+    \item \textbf{The selected diseases are approximately separable in practice.}
+    Cardiomegaly primarily affects the heart region, whereas pleural thickening appears along the pleural boundary and lung periphery. This spatial distinction does not by itself guarantee compositional success, but it provides practical evidence that the two disease effects may be separable in a suitable representation.
+
+    \item \textbf{Shared anatomy and disease-specific effects can be factorised.}
+    Given this approximate anatomical separability, we assume the representation can be decomposed into shared anatomy and disease-specific components. In particular, common chest anatomy and acquisition variation can be separated from disease-related variation, and the two disease effects can be represented with limited leakage into one another.
+
+    \item \textbf{These separations induce approximately factorised conditionals over shared anatomy.}
+    If the first two assumptions hold, then the single-disease conditionals can be treated as approximately factorised over a shared anatomical background. Under this assumption, Bayes-style composition becomes a plausible approximation for generating clinically plausible co-morbid images when joint cases are scarce.
+\end{enumerate}
+
+
+Taken together, these assumptions define the domain in which Phase~3 is expected to succeed. 
+They do not claim that co-morbid composition is guaranteed in clinical data; rather, they identify a setting in which Bayes-style composition is theoretically plausible enough to test. 
+The architecture and training objective that follow are designed to encourage a representation consistent with these assumptions, so that held-out co-morbid synthesis becomes an empirical test of H3 rather than an unconstrained application of score addition.
+
+Figure~\ref{fig:density_maps} shows that, although the two diseases can co-occur clinically, their dominant visual evidence is concentrated in different anatomical regions. 
+Cardiomegaly is centred on the heart region, whereas pleural thickening is concentrated along the peripheral lower pleural margins.
+\begin{center}
+\includegraphics[width=0.8\textwidth]{chapters/research_method/media/xray/spatial_orthogonality.png}
+\captionof{figure}{Aggregate annotation density for Cardiomegaly ($n=2{,}300$) and Pleural Thickening ($n=1{,}981$), showing distinct hotspots in the central heart region and along the peripheral lower pleural margins respectively.}
+\label{fig:density_maps}
+\end{center}
+
+% Figure~\ref{fig:density_maps} provides empirical support for the starting point of these assumptions by showing that the dominant annotation density for cardiomegaly and pleural thickening is concentrated in different anatomical regions. 
+% This does not by itself establish factorised conditionals, but it gives a concrete clinical basis for treating the selected pair as approximately separable in practice.
+
+\subsubsection{Representation Learning}
+
+These assumptions motivate an explicit architectural intervention rather than relying on a monolithic latent to disentangle anatomy and pathology implicitly. Phase~3 therefore introduces a partitioned clinical VAE inspired by SepVAE's common versus salient partitioning, but adapted to a single-dataset co-morbidity setting. Instead of separating background and target images across two datasets, the model allocates separate latent roles for shared structure and for each disease-specific effect within the same chest X-ray.
+
+This matters because a monolithic latent can still exploit co-occurrence shortcuts and encode both diseases jointly rather than compositionally. Even with supervision, cardiomegaly and pleural thickening could still leak into the same latent dimensions if that improves reconstruction. To address this, Phase~3 introduces a partitioned code,
+\begin{equation}
+    z = (z_c,\, z_{d1},\, z_{d2}),
+\end{equation}
+where $z_c$ captures shared anatomy, acquisition context, and other non-pathological variation, while $z_{d1}$ and $z_{d2}$ capture the two disease-specific factors. In the present setting, $z_{d1}$ is aligned with cardiomegaly-specific evidence and $z_{d2}$ with pleural-thickening-specific evidence. The encoder therefore produces three posterior heads, one for each latent part, whose samples are concatenated and decoded into the reconstructed radiograph. In the compositional formulation below, \(z_c\) provides the shared scaffold, while disease-specific effects are represented so they can be composed conditionally over that scaffold.
+
+This latent partition is complemented by training-only auxiliary predictor heads applied to the encoder means of the disease latents. One classifier is trained to recover cardiomegaly from $\mu_{d1}$ and the other to recover pleural thickening from $\mu_{d2}$, aligning each latent branch with its intended pathology. To discourage cross-factor leakage, the same predictors are also applied to the opposite latent branch through gradient reversal layers (GRLs), so that the classifiers detect residual leakage while the encoder is trained to remove it. These auxiliary heads are discarded at test time, leaving a generative model whose composition interface is the partitioned latent representation itself.
+
+At a high level, the objective function is composed of the following:
+\begin{itemize}
+    \item \textbf{Reconstruction and regularisation:} these preserve faithful reconstruction while keeping the shared and disease-specific latent blocks well behaved.
+
+    \item \textbf{Correct-head supervision:} auxiliary predictors applied to $\mu_{d1}$ and $\mu_{d2}$ encourage each disease-specific latent to encode its intended pathology, making the partition clinically interpretable rather than merely structural.
+
+    \item \textbf{Wrong-head suppression with GRLs:} auxiliary predictors applied to the opposite latent branch through gradient reversal layers discourage cardiomegaly evidence from leaking into $z_{d2}$ and pleural-thickening evidence from leaking into $z_{d1}$.
+
+    \item \textbf{Dependence reduction:} orthogonality or mutual-information penalties reduce residual statistical and geometric overlap between $z_{d1}$ and $z_{d2}$ beyond what the classifier-based terms remove.
+
+    \item \textbf{Region-weighted reconstruction:} bounding-box-guided reconstruction promotes locality by forcing disease-related changes to be explained primarily within the annotated pathology regions.
+\end{itemize}
+Together, these terms preserve a usable generative model while pushing the learned representation toward factor-addressable disease latents. The intended outcome is that shared anatomy remains in $z_c$, each disease-specific signal is captured in the appropriate latent part, and the two factors can later be combined with less interference at inference time.
+
+\subsubsection{Latent Diffusion Model}
+
+The partitioned VAE defines the representation, but the actual generative composition is performed by a single conditional latent diffusion model trained on that latent space. 
+We write \(u_0\) for the clean generative variable modeled by the diffusion process and \(u_t\) for its noisy version at time \(t\), with generation initialized from \(u_T \sim \mathcal{N}(0,I)\). 
+In this setup, diffusion operates over the generative variable \(u\), while \(z_c\) provides the shared anatomical context. Composition is performed over \(u\) conditioned on \(z_c\), and the null condition \(\varnothing\) corresponds to omitting the disease label while keeping that shared context fixed.
+
+We do not train separate unconditional and conditional generators, because classifier-free guidance assumes a single conditional diffusion model that can be evaluated under different conditions. 
+During training, each \(u_0\) is paired with its observed disease label \(y \in \{c_1,c_2\}\), and that label is replaced by the null condition \(\varnothing\) with probability \(p_{\mathrm{uncond}}\). 
+This gives one diffusion model that learns the conditional branches \(\varepsilon_\theta(u_t,t \mid z_c,c_1)\) and \(\varepsilon_\theta(u_t,t \mid z_c,c_2)\) together with the branch \(\varepsilon_\theta(u_t,t \mid z_c,\varnothing)\). 
+Here, \(\varnothing\) means no disease label given \(z_c\), not a literal normal or no-finding class. 
+In the low-resource setting of Phase~3, joint cardiomegaly and pleural-thickening cases are absent or heavily reduced during generative training, but the model still learns the two single-disease conditionals and the null branch required for conditional composition.
+
+Under the conditional independence assumption above, the corresponding score decomposition is
+\begin{equation}
+    \nabla_u \log p(u \mid z_c, c_1, c_2)
+    =
+    \nabla_u \log p(u \mid z_c, c_1)
+    +
+    \nabla_u \log p(u \mid z_c, c_2)
+    -
+    \nabla_u \log p(u \mid z_c).
+\end{equation}
+In practice, Phase~3 implements the classifier-free guidance analogue of this conditional score decomposition:
+\begin{equation}
+\begin{aligned}
+    \tilde\varepsilon_{\mathrm{AND}}(u_t,t; z_c)
+    &=
+    \varepsilon_\theta(u_t,t \mid z_c,\varnothing) \\
+    &\quad+
+    w_1\bigl[
+        \varepsilon_\theta(u_t,t \mid z_c,c_1)
+        -
+        \varepsilon_\theta(u_t,t \mid z_c,\varnothing)
+    \bigr] \\
+    &\quad+
+    w_2\bigl[
+        \varepsilon_\theta(u_t,t \mid z_c,c_2)
+        -
+        \varepsilon_\theta(u_t,t \mid z_c,\varnothing)
+    \bigr].
+\end{aligned}
+\end{equation}
+This \(\varepsilon\)-based form is the practical CFG-style approximation to the conditional Bayes score decomposition, not an exact probabilistic identity. The resulting denoised latent is then decoded through the VAE decoder to produce a candidate co-morbid radiograph, which is passed to the evaluation procedure below. In this way, Phase~3 combines a partitioned representation with a single conditional latent diffusion model that implements Bayes-style composition over a shared scaffold.
+
+
+\subsection{Evaluation}
+\label{subsec:p3_eval}
+
+Phase~3 evaluates whether a factorised clinical representation supports \emph{held-out co-morbid composition} in a realistic low-resource setting. Here, \emph{co-morbidity} means the simultaneous presence of the two target pathologies in the same chest radiograph, and a \emph{held-out co-morbid presentation} means a joint cardiomegaly--pleural-thickening case that is absent or strongly reduced during generative training, even though single-disease cases remain available. The goal is therefore not only to generate visually plausible images, but to test whether the model can recover a clinically meaningful joint presentation that was not available, or was severely underrepresented, during training.
+
+In this phase, \emph{composition} refers to combining the two disease-specific latent factors over a shared anatomical scaffold \(z_c\) and decoding the result into a candidate co-morbid radiograph. This is the clinical analogue of held-out recombination in Phase~2, but the target is now a realistic joint disease presentation rather than a synthetic attribute pair. The evaluation therefore tests two related questions: first, whether the model can generalise to an unseen or severely underrepresented co-morbid combination; and second, whether the resulting sample remains radiologically plausible rather than collapsing into an artificial overlay or a spatially incoherent hybrid.
+
+To evaluate this, each composed image \(x\) is assessed along three dimensions: pathology presence, co-morbidity fidelity, and spatial plausibility. These three criteria jointly define success in the clinical setting. Pathology presence checks whether recoverable evidence for both target diseases is present in the generated image. Co-morbidity fidelity checks whether the image resembles a genuine joint presentation rather than merely containing two isolated disease cues. Spatial plausibility checks whether the disease evidence appears in the anatomically expected regions motivated by the pathology annotations.
+
+\paragraph{Pathology presence.}
+We first test whether the composed image contains recoverable evidence for both target diseases. To do this, we use two external pathology classifiers, trained on data splits disjoint from generative-model training: a cardiomegaly classifier \(f_{\mathrm{card}}(x)\) and a pleural-thickening classifier \(f_{\mathrm{pleural}}(x)\), each of which returns a probability of pathology presence.
+
+For a composed sample \(x^{(i)}\), binary pathology recovery is defined as
+\[
+p_{\mathrm{card}}^{(i)}
+=
+\begin{cases}
+1, & \text{if } f_{\mathrm{card}}(x^{(i)}) \ge \tau_{\mathrm{card}},\\[6pt]
+0, & \text{otherwise,}
+\end{cases}
+\qquad
+p_{\mathrm{pleural}}^{(i)}
+=
+\begin{cases}
+1, & \text{if } f_{\mathrm{pleural}}(x^{(i)}) \ge \tau_{\mathrm{pleural}},\\[6pt]
+0, & \text{otherwise.}
+\end{cases}
+\]
+Here \(\tau_{\mathrm{card}}\) and \(\tau_{\mathrm{pleural}}\) are predefined decision thresholds that convert the pathology-classifier output probabilities into binary presence decisions, calibrated on a validation split and fixed before final testing.
+Joint pathology presence is then
+\[
+p_{\mathrm{joint}}^{(i)}
+=
+\begin{cases}
+1, & \text{if } p_{\mathrm{card}}^{(i)} = 1 \text{ and } p_{\mathrm{pleural}}^{(i)} = 1,\\[6pt]
+0, & \text{otherwise.}
+\end{cases}
+\]
+The overall pathology-presence rate is
+\[
+\mathrm{Pres}
+=
+\frac{1}{M}\sum_{i=1}^{M} p_{\mathrm{joint}}^{(i)}.
+\]
+This is the clinical analogue of factor recovery in Phase~2: it asks whether both target pathologies remain recoverable in the generated samples, not merely whether the image appears plausible overall.
+\paragraph{Co-morbidity fidelity.}
+Pathology presence alone is not sufficient, because an image could score positive for both pathologies yet still fail to resemble a genuine co-morbid radiograph. To test whether the composed image looks like a plausible joint presentation rather than an artificial overlay, we use a third external classifier,
+\[
+f_{\mathrm{co}}(x^{(i)}) \in [0,1],
+\]
+trained on real co-morbid chest X-rays. Its output is interpreted as a co-morbidity fidelity score:
+\[
+s_{\mathrm{fid}}^{(i)} = f_{\mathrm{co}}(x^{(i)}).
+\]
+Higher values indicate stronger agreement with the distribution of genuine co-morbid radiographs. We then define the binary fidelity-pass indicator
+\[
+r_{\mathrm{fid}}^{(i)}
+=
+\begin{cases}
+1, & \text{if } s_{\mathrm{fid}}^{(i)} \ge \tau_{\mathrm{co}},\\[6pt]
+0, & \text{otherwise.}
+\end{cases}
+\]
+This score is therefore intended as a proxy for radiological plausibility of the joint presentation, not merely for the separate presence of both labels.
+
+\subsection{Summary}
+
+Phase~3 transfers the representation hypothesis of Phase~2 to a clinical low-resource co-morbidity setting using VinBigData. It assumes that shared anatomy can be represented by \(z_c\), disease-specific effects can be factorised from that shared context, and composition can therefore be performed over the generative variable \(u\) conditioned on \(z_c\). To test this, Phase~3 combines a partitioned latent architecture, a factor-separating objective, and a single conditional latent diffusion model.
+
+The central test is whether this representation supports held-out co-morbid composition. If composed samples recover both target pathologies, remain spatially plausible, and are judged consistent with real co-morbid radiographs, then Phase~3 supports H3. Otherwise, either the conditional assumptions are too weak in this clinical setting or the learned representation is still not sufficiently factorised to support stable composition.

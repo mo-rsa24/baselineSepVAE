@@ -1,0 +1,48 @@
+% !TEX root = ../../proposal.tex
+
+\section{Disentangled Representation Learning}
+\label{sec:rw_disentanglement}
+
+The goal of learning a representation in which each latent dimension corresponds to one
+interpretable factor of variation was formalised by the disentanglement literature.
+$\beta$-VAE~\citep{Higgins2016betaVAELB} showed that strengthening the VAE's KL bottleneck
+encourages factorial posteriors at the cost of reconstruction quality. FactorVAE~\citep{disentangling_by_factorising}
+refined this by penalising total correlation directly, producing cleaner factor separation
+at comparable reconstruction. The DCI framework~\citep{eastwood2018framework} provided a
+principled evaluation methodology: factor importance matrices derived from supervised
+regressors yield per-dimension Disentanglement, per-factor Completeness, and overall
+Informativeness scores that are independent of model architecture. Locatello et
+al.~\citep{locatello2019challenging} delivered a decisive negative result: unsupervised
+disentanglement is unidentifiable without inductive bias, and random seeds account for as
+much variance in disentanglement scores as method choice. This finding directly motivates
+the supervised regimes in Phase~2 --- Regime~C2 adds label-based factor supervision, and
+Regime~D adds structural partitioning --- as the inductive biases needed to make
+disentanglement reliable under correlated training data.
+
+Traeuble et al.~\citep{traeuble2021disentangled} showed that when training factors are
+correlated, standard independence-based objectives fail to disentangle them because the
+model exploits the correlation as a prediction shortcut. Weak supervision over the factor
+labels partially restores separation. This is the precise failure mode that Phase~2
+Regime~B exhibits: correlation in the dSprites training distribution entangles orientation
+and scale, causing held-out composition to degrade. The Regime~A--B--C1--C2--D ladder
+in Phase~2 is directly motivated by this result. Roth et al.~\citep{roth2023disentanglement}
+extended this analysis to show that data augmentation strategies that break the spurious
+correlation can also help, complementing the supervision approach.
+
+The adversarial mechanism used in Phase~2 for wrong-head suppression traces to Ganin and
+Lempitsky~\citep{ganin2015unsupervised, ganin2016domain}, who introduced the Gradient
+Reversal Layer (GRL) for domain-invariant feature learning in DANN. The GRL is identity
+in the forward pass but negates the gradient in the backward pass, turning any attached
+classifier into an adversary that instructs the encoder to remove a nuisance attribute
+from its representation. Scaramuzzino et al.~\citep{attribute_disentanglement} applied
+this mechanism directly to attribute disentanglement in fashion retrieval: a correct-head
+classifier encourages each attribute to be encoded in its designated latent region, while
+a GRL-coupled wrong-head classifier actively suppresses that attribute from all other
+regions. Phase~2's SP-VAE design follows this pattern precisely, extending it to a
+three-way latent partition with two independently supervised and adversarially excluded
+factors. SepVAE~\citep{louiset2024sepvae} provides the structural partitioning inspiration:
+by allocating common and salient variation to separate latent subspaces rather than
+regularising within a shared code, it achieves more reliable pathology separation in
+contrastive medical imaging datasets than independence penalties alone. SP-VAE adapts
+the SepVAE structural insight to the single-dataset, multi-factor recombination setting
+of correlated dSprites and combines it with GRL-based exclusion.

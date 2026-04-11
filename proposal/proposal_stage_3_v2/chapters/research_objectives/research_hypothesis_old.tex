@@ -1,0 +1,26 @@
+% !TEX root = ../../proposal.tex
+
+\section{Research Hypotheses}
+\label{sec:research_objectives_research_hypothesis}
+
+The main research hypotheses, corresponding to the research goals above, are:
+
+\begin{itemize}
+    \item \textbf{H1 (The Composability Gap Hypothesis):}
+    Logical composition via additive score dynamics assumes a factorized joint distribution, which is only a valid proxy for semantic composition when the constituent concepts are conditionally independent.
+    As the mutual information or relational dependency between concepts increases (e.g., spatial positioning or complex interactions), the logical composition fails to capture the emergent structural constraints of the true joint posterior.
+    This results in a measurable divergence in latent trajectories, where logical composition enters regions of the manifold that are semantically unreachable through a single integrated prompt.
+    \item \textbf{H2 (Pathology Independence Hypothesis):}
+    To model spatial relation between concepts and ensure coherent attribute binding, the concepts being composed need to be factorized and independent for logical composition to represent semantic meaning.
+    Furthermore, this assumption can be applied to real-world application such as medical imaging whereby pathologies are treated as concepts. If pathological disease conditions are treated as independent,
+    then we can logically compose pre-trained diffusion models during inference to generate ecologically valid co-morbid conditions not seen during training.
+    \item \textbf{H3 (Geometric Compatibility Hypothesis).}
+    The composability gap demonstrates that logical composition lands off the natural data manifold thus producing low-quality and unrealistic outputs (hybridization).
+    We hypothesize that natural data, such as medical images, occupy a riemannian manifold such that linear operations in the latent space fall off manifold.
+    Hence, we expect logical composition using score-addition to fail to represent concepts semantically.
+    We hypothesize that modeling the latent space as a riemannian manifold and traversing logical composition through geodesics keeps on the manifold such that
+    composition retain semantic meaning. This closes the gap between logical and semantic composability.
+\end{itemize}
+
+
+H2: "If disease-related variation can be approximately factorised from shared anatomical and acquisition variation, then score composition in latent space should better approximate multi-pathology generation than composition in a fully entangled latent space

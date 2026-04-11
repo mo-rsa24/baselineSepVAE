@@ -1,0 +1,124 @@
+\documentclass[a4paper,twoside,12pt]{report}
+% Richard Klein (2020,2021)
+
+% Include Packages
+%\usepackage[a4paper,inner=3.5cm,outer=2.5cm,top=2.5cm,bottom=2.5cm]{geometry}  % Set page margins
+\usepackage{style/witsa4}
+\usepackage{style/witshead}
+\usepackage{float}                  % Allows 'Here and Only Here' [H] for Floats
+\usepackage{url}                    % \url{} command
+\usepackage{charter}                  % Set font to Times
+\usepackage{graphicx}               % \includegraphics
+\usepackage{subfigure}              % Allow subfigures
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{amsthm}
+\usepackage{booktabs}
+\usepackage{parskip}
+\usepackage[all]{nowidow}
+\setnoclub[2]
+\setnowidow[2]
+
+% Referencing
+% Provides \Vref and \vref to indicate where a reference is.
+\usepackage{varioref} 
+% Hyperlinks references
+\usepackage[bookmarks=true,bookmarksopen=true]{hyperref} 
+% Provides \Cref, \cref, \Vref, \vref to include the type of reference: fig/eqn/tbl
+\usepackage{cleveref} 
+% Setup Hyperref
+\hypersetup{
+  colorlinks   = true,              %Colours links instead of ugly boxes
+  urlcolor     = blue,              %Colour for external hyperlinks
+  linkcolor    = blue,              %Colour of internal links
+  citecolor    = blue                %Colour of citations
+}
+% Names for Clever Ref
+\crefname{table}{table}{tables}
+\Crefname{table}{Table}{Tables}
+\crefname{figure}{figure}{figures}
+\Crefname{figure}{Figure}{Figures}
+\crefname{equation}{equation}{equations}
+\Crefname{equation}{Equation}{Equations}
+
+% Wits Citation Style
+\usepackage{natbib} \input{natbib-add}
+\bibliographystyle{named-wits}
+\bibpunct{[}{]}{;}{a}{}{}  % to get correct punctuation for bibliography
+\setlength{\skip\footins}{1.5cm}
+\newcommand{\citets}[1]{\citeauthor{#1}'s \citeyearpar{#1}}
+\renewcommand\bibname{References}  
+
+\pagestyle{headings}
+
+\pagestyle{plain}
+\pagenumbering{roman}
+
+\renewenvironment{abstract}{\ \vfill\begin{center}\textbf{Abstract}\end{center}\addcontentsline{toc}{section}{Abstract}}{\vfill\vfill\newpage}
+\newenvironment{declaration}{\ \vfill\begin{center}\textbf{Declaration}\end{center}\addcontentsline{toc}{section}{Declaration}}{\vfill\vfill\newpage}
+\newenvironment{acknowledgements}{\ \vfill\begin{center}\textbf{Acknowledgements}\end{center}\addcontentsline{toc}{section}{Acknowledgements}}{\vfill\vfill\newpage}
+
+\begin{document}
+\onecolumn
+\thispagestyle{empty}
+
+\setcounter{page}{0}
+\addcontentsline{toc}{chapter}{Preface}
+\begin{center}
+
+\end{center}
+\vfill
+\newpage
+
+\pagestyle{plain}
+\setcounter{page}{1}
+
+\phantomsection
+\begin{abstract}
+\end{abstract}
+
+\phantomsection
+\begin{declaration}
+\end{declaration}
+
+\phantomsection
+\begin{acknowledgements}
+\end{acknowledgements}
+
+\phantomsection
+\addcontentsline{toc}{section}{Table of Contents}
+\tableofcontents
+\newpage
+\phantomsection
+\addcontentsline{toc}{section}{List of Figures}
+\listoffigures
+\newpage
+\phantomsection
+\addcontentsline{toc}{section}{List of Tables}
+\listoftables
+\newpage
+\pagenumbering{arabic}
+
+\chapter{Introduction}
+\section{Hello World}
+\section{Another Section}
+\subsection{This is a Subsection}
+\subsubsection{This is a subsubsection}
+\subsection{A Subsection about Citation Style}
+
+\subsection{Compiling}
+
+\chapter{Floats}
+
+\chapter{Some Referencing Tricks}
+
+\chapter{IDE/Editors}
+
+\appendix
+\chapter{Extra Stuff}\label{app:extra}
+\section{What is an appendix?}\label{app:whatis}
+
+\nocite{*}
+
+\bibliography{references}\addcontentsline{toc}{chapter}{References}
+\end{document}

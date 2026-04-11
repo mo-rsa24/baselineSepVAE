@@ -1,0 +1,70 @@
+% !TEX root = ../../proposal.tex
+
+\section{Conclusion}
+\label{sec:conclusion}
+Phase 1 produces four concrete outputs for the broader research programme:
+
+\begin{enumerate}
+
+    \item \textbf{A curated concept-pair benchmark} of 24 pairs spanning the four theory-grounded taxonomy groups, with shared-noise evaluation protocols and per-pair metadata (taxonomy group, theoretical basis, and expected failure mode).
+    This benchmark provides a reusable testbed for evaluating compositional generation methods beyond this research.
+
+    \item \textbf{A trajectory measurement framework}: shared-noise MDS projections and per-step MSE metrics that characterise the gap geometrically and temporally.
+    The framework is model-agnostic and can be applied to any pair of composition conditions.
+
+    \item \textbf{A temporal characterisation} of gap onset and amplification: the decomposition of cumulative divergence into early-step (layout) and late-step (identity resolution) contributions.
+    This identifies the denoising interval where guidance schemes would need to intervene to close the gap.
+
+    \item \textbf{A reachability map}: per-category cycle-consistency scores under SD-IPC inversion, providing lower-bound evidence for the structural inaccessibility of logical composition endpoints.
+
+\end{enumerate}
+
+Together, these outputs constitute the principled measurement framework called for by Research Goal~1 and provide the empirical grounding for Hypothesis~1.
+
+Phase~2 builds on this with three concrete outputs:
+
+\begin{enumerate}
+
+    \item \textbf{A four-regime controlled design:} standard dSprites serves as a positive
+    control, correlated dSprites provides the failure setting, Regime~C contributes both benchmark
+    disentanglement models and matched-supervision controls, and correlated dSprites with SP-VAE
+    provides the structural intervention. This design isolates the effect of latent factorisation
+    while keeping the composition test fixed.
+
+    \item \textbf{A held-out composition-success evaluation:} attribute classifiers trained on
+    disjoint data verify whether a composed sample recovers both target factors from withheld
+    orientation--scale combinations, supported by representative qualitative examples.
+
+    \item \textbf{A benchmarked representation comparison:} when the data distribution induces
+    entanglement, composition degrades; benchmark disentanglement models test how much of that loss
+    can be recovered through independence objectives alone, matched-supervision controls test how
+    much is recovered from supervision without latent partitioning, and SP-VAE tests whether
+    explicit factor-addressable partitioning improves further. This comparison is the core
+    empirical support for H2.
+
+\end{enumerate}
+
+Phase~3 translates these findings to the clinical domain:
+
+\begin{enumerate}
+
+    \item \textbf{Clinical held-out composition evaluation:} pathology presence classifiers, a
+    co-morbidity fidelity classifier trained on real co-morbid CXR cases, and spatial plausibility
+    checks constitute the clinical analogue of the Phase~2 evaluation logic.
+
+    \item \textbf{An empirical answer to H3:} whether approximate anatomical independence between
+    cardiomegaly and pleural thickening is sufficient for factorised composition to produce
+    ecologically valid co-morbid chest X-rays not present in the training data.
+
+\end{enumerate}
+
+The unifying claim across all three phases is the same: compositional generation of
+out-of-distribution combinations works when the internal representations of the composed concepts
+do not conflict with each other. Phase~1 documents that this conflict exists and is predictable
+from the structure of the training distribution. Phase~2 shows that this conflict can be reduced
+in a controlled setting by improving latent factorisation under a fixed composition rule. Phase~3
+tests whether the approximate anatomical separation of disease conditions in chest X-rays provides
+the same leverage in a real clinical setting --- and thereby determines whether factorised
+composition can produce clinically valid co-morbid presentations without ever having seen them in
+training.
+

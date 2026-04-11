@@ -1,0 +1,75 @@
+% Fulbright Foreign Student Program 2027-2028
+% Study/Research Objective — Visiting Student Researcher (PhD)
+% ~2 pages
+
+\documentclass[12pt,a4paper]{article}
+\usepackage[margin=2.54cm]{geometry}
+\usepackage{setspace}
+\usepackage{parskip}
+\usepackage{times}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.85em}
+\onehalfspacing
+
+\begin{document}
+
+\begin{center}
+  {\large\textbf{Study/Research Objective}} \\[0.4em]
+  {\normalsize Fulbright Foreign Student Program~--- Visiting Student Researcher (PhD)}
+\end{center}
+
+\vspace{0.5em}
+
+\textbf{The Problem: Rare Disease, Scarce Data, and the Limits of Generation}
+
+Across the world, clinical datasets are shaped by a difficult statistical reality: the rarest disease presentations are often the most diagnostically important, yet they have the fewest examples for machine learning models to learn from. In chest radiography, co-morbid conditions, where patients present with more than one pathology at the same time, are a clear example of this challenge. A patient showing both cardiomegaly and pleural thickening is not unusual in practice, but the joint presentation is far less represented than each condition individually.
+
+Common approaches such as data augmentation or oversampling do not solve this problem. They simply reweight the same limited distribution rather than generating new, realistic co-morbid cases. A more principled alternative is to train generative models that can combine knowledge of individual diseases to produce plausible joint presentations at inference time, without requiring large jointly labeled datasets. My doctoral research investigates when this kind of compositional generation works, and what properties of the learned representation make it possible.
+
+\textbf{The Intellectual Core: The Composability Gap}
+
+Compositional diffusion models combine separately trained generative models at inference time by operating directly on their score functions, rather than training a single joint model. In its most general form, this leads to a Bayes-inspired score combination:
+
+[
+\nabla_x \log p(x \mid c_1, c_2)
+\approx
+\nabla_x \log p(x \mid c_1)
+
+* \nabla_x \log p(x \mid c_2)
+
+- \nabla_x \log p(x).
+  ]
+
+This formulation assumes that the two concepts act on separable regions of the model’s feature space. When this assumption does not hold, logical composition (combining scores) and semantic composition (using a single joint prompt) produce different results. I refer to this difference as the \textit{composability gap}.
+
+The gap is structured and depends on how concepts interact. Concept pairs that frequently co-occur or affect different features tend to compose reliably. In contrast, pairs that compete for the same semantic role or share overlapping representations often fail to compose correctly. I measure this gap using a trajectory-level metric that tracks how differently two generation processes evolve over time. Specifically, it computes the mean-squared latent distance between a jointly prompted trajectory and a score-composed trajectory at each denoising step. Empirically, this metric follows a consistent pattern across different types of concept pairs, ranging from near-zero divergence for compatible concepts to systematic failure for conflicting ones. This forms the first phase of my dissertation and provides a concrete way to analyse compositional failure across models and datasets.
+
+\textbf{Progress to Date}
+
+My current work has two main components. First, I implemented a diagnostic framework for measuring the composability gap in text-to-image diffusion models. Using a shared-noise protocol to control for randomness, I showed that divergence between semantic and logical composition appears early in the denoising process for conflicting concept pairs, and remains minimal for compatible pairs. This behaviour is consistent across multiple models, including Stable Diffusion 1.4, SDXL, and SD 3.5 Medium. The gap can also be predicted from the geometry of CLIP embedding space, linking compositional behaviour directly to representation structure.
+
+Second, I built and validated a separation model for chest radiographs. Using the VinBigData dataset of 15,000 posteroanterior X-rays annotated by radiologists, I trained a variational autoencoder with a partitioned latent space. This space consists of a shared anatomical component (z_c) and disease-specific components (z_{d1}) and (z_{d2}). The model produces pathology-consistent reconstructions when disease latents are active, and realistic normal anatomy when they are suppressed, indicating meaningful separation.
+
+To improve localisation, I incorporated bounding-box-guided reconstruction and adversarial gradient reversal across latent partitions. This ensures that cardiomegaly signals are concentrated in the cardiac silhouette, while pleural thickening signals appear in the pleural regions. These results show that the independence assumptions required for score-based composition can be approximately satisfied in real clinical data, and that factorised representations can be learned from predominantly single-disease datasets.
+
+\textbf{Proposed Research at the Host Institution}
+
+The next stage of my research addresses a central question: does the composability gap arise from limitations in the representation, or from the composition rule itself?
+
+During the Fulbright period, I will complete Phase 2 and begin Phase 3 of my dissertation. In Phase 2, I will evaluate disentanglement under controlled correlation settings using the dSprites benchmark. I will compare a standard VAE, a correlated variant that induces entanglement, beta-VAE, FactorVAE, and my proposed SP-VAE with explicit latent partitioning. By keeping the diffusion model and composition rule fixed, I can isolate the effect of representation quality on compositional performance.
+
+Phase 3 extends this analysis to the clinical setting. I will scale the latent model using larger U.S.-based chest X-ray datasets and evaluate whether the learned factorisation supports realistic synthesis of co-morbid conditions.
+
+The U.S. is particularly important for this work because it provides access to large-scale medical datasets, established radiologist collaboration pipelines, and interdisciplinary research environments where machine learning and clinical expertise are closely integrated. These resources are difficult to access at comparable scale in my current setting.
+
+During the exchange, I will complete the controlled experiments in Phase 2 using expanded computational resources, initiate large-scale clinical evaluation in Phase 3 with access to richer annotations and expert input, and study reachability in diffusion models. This includes testing whether outputs produced through score-based composition can be reproduced using prompt-based generation alone, providing further insight into the relationship between representation and inference.
+
+\textbf{Broader Impact and Return Commitment}
+
+South Africa faces a severe shortage of radiologists, with the public healthcare system serving large populations with limited diagnostic capacity. Methods that can generate realistic co-morbid training data from single-disease examples have direct practical value. They can improve training datasets, support automated screening systems, and help clinicians recognise rare disease combinations.
+
+Beyond this application, the framework developed in this work applies to any setting where multi-factor generation is required under limited data conditions, including other areas of medical imaging such as dermatology and retinal analysis.
+
+After completing the Fulbright exchange, I will return to my home institution and contribute to the development of AI in healthcare in South Africa. I aim to help build the infrastructure and collaborative networks needed to apply these methods responsibly in clinical settings. I am committed to publishing in open-access venues, sharing code and models, and working closely with clinicians to ensure that these tools address real diagnostic needs.
+
+\end{document}

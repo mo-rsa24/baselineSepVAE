@@ -1,0 +1,24 @@
+% !TEX root = ../../proposal.tex
+
+\begin{abstract}
+Compositional generative modeling aims to create complex unseen combinations by composing multiple pretrained models. 
+Instead of relying on a single large-scale system, individual expert models can be combined at inference time to enable out-of-distribution generation. 
+A single model must learn these combinations directly from training data, which becomes difficult when many of them are rare or missing.
+In contrast, compositional approaches factorize this problem into reusable components, enabling data-efficient generalization to novel combinations without retraining.
+This capability is critical in low-resource settings where specific data combinations are rare. 
+In clinical imaging, for example, hospitals often have many scans for single diseases but very few examples of rare co-morbidities. 
+A compositional system might bridge this gap by synthesizing plausible rare cases from these separate components to support data augmentation.
+
+However, current compositional methods often fail. 
+These systems struggle with tasks like attribute binding, negation, and combining closely related concepts. 
+A primary reason for this failure is the mathematical operator used to combine conditions, which we term as ``logical composition''. 
+This mathematical approach does not always match the semantically meaningful output produced by a single prompt for a complex scene. 
+This creates a disconnect between the mathematical combination and the intended scene. 
+The result limits image quality and makes synthetic data unreliable for sensitive clinical use.
+
+The proposed study investigates this disconnect and aims to develop a method to reduce it. 
+The research follows three steps. First, it characterizes the failure of logical composition through a structured categorization of concept pairs and trajectory analysis. 
+Second, it tests whether learning more factorized representations, using a partitioned latent space, can align the mathematical combinations with the target scene. 
+Finally, it demonstrates the utility of this framework in medical imaging. The proposed study evaluates whether rare, co-morbid chest X-rays can be synthesized from individual common and separate disease models. 
+This work aims to make out-of-distribution synthesis more reliable and useful for practical downstream tasks.
+\end{abstract}

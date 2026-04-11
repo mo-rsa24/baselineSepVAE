@@ -1,0 +1,733 @@
+@book{tomczak2024deep,
+  title     = {Deep Generative Modeling},
+  author    = {Tomczak, Jakub M},
+  publisher = {Springer Cham},
+  year      = {2024}
+}
+@inproceedings{on_disentangled_representation_learning,
+  title     = {On Disentangled Representations Learned from Correlated Data},
+  author    = {Tr{\"a}uble, Frederik and Creager, Elliot and Kilbertus, Niki and Locatello, Francesco and Dittadi, Andrea and Goyal, Anirudh and Sch{\"o}lkopf, Bernhard and Bauer, Stefan},
+  booktitle = {Proceedings of the 38th International Conference on Machine Learning},
+  pages     = {10401--10412},
+  year      = {2021},
+  editor    = {Meila, Marina and Zhang, Tong},
+  volume    = {139},
+  series    = {Proceedings of Machine Learning Research},
+  month     = {18--24 Jul},
+  publisher = {PMLR},
+  pdf       = {http://proceedings.mlr.press/v139/trauble21a/trauble21a.pdf},
+  url       = {https://proceedings.mlr.press/v139/trauble21a.html},
+  abstract  = {The focus of disentanglement approaches has been on identifying independent factors of variation in data. However, the causal variables underlying real-world observations are often not statistically independent. In this work, we bridge the gap to real-world scenarios by analyzing the behavior of the most prominent disentanglement approaches on correlated data in a large-scale empirical study (including 4260 models). We show and quantify that systematically induced correlations in the dataset are being learned and reflected in the latent representations, which has implications for downstream applications of disentanglement such as fairness. We also demonstrate how to resolve these latent correlations, either using weak supervision during training or by post-hoc correcting a pre-trained model with a small number of labels.}
+}
+@article{Bouchacourt_Tomioka_Nowozin_2018,
+  title        = {Multi-Level Variational Autoencoder: Learning Disentangled Representations From Grouped Observations},
+  volume       = {32},
+  url          = {https://ojs.aaai.org/index.php/AAAI/article/view/11867},
+  doi          = {10.1609/aaai.v32i1.11867},
+  abstractnote = { &lt;p&gt; We would like to learn a representation of the data that reflects the semantics behind a specific grouping of the data, where within a group the samples share a common factor of variation. For example, consider a set of face images grouped by identity. We wish to anchor the semantics of the grouping into a disentangled representation that we can exploit. However, existing deep probabilistic models often assume that the samples are independent and identically distributed, thereby disregard the grouping information. We present the Multi-Level Variational Autoencoder (ML-VAE), a new deep probabilistic model for learning a disentangled representation of grouped data. The ML-VAE separates the latent representation into semantically relevant parts by working both at the group level and the observation level, while retaining efficient test-time inference. We experimentally show that our model (i) learns a semantically meaningful disentanglement, (ii) enables control over the latent representation, and (iii) generalises to unseen groups. &lt;/p&gt; },
+  number       = {1},
+  journal      = {Proceedings of the AAAI Conference on Artificial Intelligence},
+  author       = {Bouchacourt, Diane and Tomioka, Ryota and Nowozin, Sebastian},
+  year         = {2018},
+  month        = {Apr.}
+}
+
+
+@inproceedings{eastwood2018framework,
+  author    = {Cian Eastwood and Christopher K. I. Williams},
+  title     = {A Framework for the Quantitative Evaluation of Disentangled Representations},
+  booktitle = {International Conference on Learning Representations (ICLR)},
+  year      = {2018},
+  url       = {https://openreview.net/forum?id=By-7dz-AZ}
+}
+
+@inproceedings{chen2018isolating,
+  author    = {Tian Qi Chen and Xuechen Li and Roger Grosse and David Duvenaud},
+  title     = {Isolating Sources of Disentanglement in Variational Autoencoders},
+  booktitle = {Advances in Neural Information Processing Systems 31},
+  pages     = {2615--2625},
+  year      = {2018},
+  url       = {https://papers.nips.cc/paper/7527-isolating-sources-of-disentanglement-in-variational-autoencoders}
+}
+@inproceedings{BetkerImprovingIG,
+  title  = {Improving Image Generation with Better Captions},
+  author = {James Betker and Gabriel Goh and Li Jing and † TimBrooks and Jianfeng Wang and Linjie Li and † LongOuyang and † JuntangZhuang and † JoyceLee and † YufeiGuo and † WesamManassra and † PrafullaDhariwal and † CaseyChu and † YunxinJiao and Aditya Ramesh},
+  url    = {https://api.semanticscholar.org/CorpusID:264403242}
+}
+
+@article{chen2020wavegrad,
+  title   = {Wavegrad: Estimating gradients for waveform generation},
+  author  = {Chen, Nanxin and Zhang, Yu and Zen, Heiga and Weiss, Ron J and Norouzi, Mohammad and Chan, William},
+  journal = {arXiv preprint arXiv:2009.00713},
+  year    = {2020}
+}
+@inproceedings{structured_denoising,
+  author    = {Austin, Jacob and Johnson, Daniel D. and Ho, Jonathan and Tarlow, Daniel and van den Berg, Rianne},
+  title     = {Structured denoising diffusion models in discrete state-spaces},
+  year      = {2021},
+  isbn      = {9781713845393},
+  publisher = {Curran Associates Inc.},
+  address   = {Red Hook, NY, USA},
+  abstract  = {Denoising diffusion probabilistic models (DDPMs) [17] have shown impressive results on image and waveform generation in continuous state spaces. Here, we introduce Discrete Denoising Diffusion Probabilistic Models (D3PMs), diffusionlike generative models for discrete data that generalize the multinomial diffusion model of Hoogeboom et al. [18], by going beyond corruption processes with uniform transition probabilities. This includes corruption with transition matrices that mimic Gaussian kernels in continuous space, matrices based on nearest neighbors in embedding space, and matrices that introduce absorbing states. The third allows us to draw a connection between diffusion models and autoregressive and mask-based generative models. We show that the choice of transition matrix is an important design decision that leads to improved results in image and text domains. We also introduce a new loss function that combines the variational lower bound with an auxiliary cross entropy loss. For text, this model class achieves strong results on character-level text generation while scaling to large vocabularies on LM1B. On the image dataset CIFAR-10, our models approach the sample quality and exceed the log-likelihood of the continuous-space DDPM model.},
+  booktitle = {Proceedings of the 35th International Conference on Neural Information Processing Systems},
+  articleno = {1376},
+  numpages  = {13},
+  series    = {NIPS '21}
+}
+@inproceedings{argmax_flows,
+  author    = {Hoogeboom, Emiel and Nielsen, Didrik and Jaini, Priyank and Forr\'{e}, Patrick and Welling, Max},
+  title     = {Argmax flows and multinomial diffusion: learning categorical distributions},
+  year      = {2021},
+  isbn      = {9781713845393},
+  publisher = {Curran Associates Inc.},
+  address   = {Red Hook, NY, USA},
+  abstract  = {Generative flows and diffusion models have been predominantly trained on ordinal data, for example natural images. This paper introduces two extensions of flows and diffusion for categorical data such as language or image segmentation: Argmax Flows and Multinomial Diffusion. Argmax Flows are defined by a composition of a continuous distribution (such as a normalizing flow), and an argmax function. To optimize this model, we learn a probabilistic inverse for the argmax that lifts the categorical data to a continuous space. Multinomial Diffusion gradually adds categorical noise in a diffusion process, for which the generative denoising process is learned. We demonstrate that our method outperforms existing dequantization approaches on text modelling and modelling on image segmentation maps in log-likelihood.},
+  booktitle = {Proceedings of the 35th International Conference on Neural Information Processing Systems},
+  articleno = {953},
+  numpages  = {12},
+  series    = {NIPS '21}
+}
+@inproceedings{diffusion_lm,
+  author    = {Li, Xiang Lisa and Thickstun, John and Gulrajani, Ishaan and Liang, Percy and Hashimoto, Tatsunori B.},
+  title     = {Diffusion-LM improves controllable text generation},
+  year      = {2022},
+  isbn      = {9781713871088},
+  publisher = {Curran Associates Inc.},
+  address   = {Red Hook, NY, USA},
+  abstract  = {Controlling the behavior of language models (LMs) without re-training is a major open problem in natural language generation. While recent works have demonstrated successes on controlling simple sentence attributes (e.g., sentiment), there has been little progress on complex, fine-grained controls (e.g., syntactic structure). To address this challenge, we develop a new non-autoregressive language model based on continuous diffusions that we call Diffusion-LM. Building upon the recent successes of diffusion models in continuous domains, Diffusion-LM iteratively denoises a sequence of Gaussian vectors into word vectors, yielding a sequence of intermediate latent variables. The continuous, hierarchical nature of these intermediate variables enables a simple gradient-based algorithm to perform complex, controllable generation tasks. We demonstrate successful control of Diffusion-LM for six challenging fine-grained control tasks, significantly outperforming prior work.},
+  booktitle = {Proceedings of the 36th International Conference on Neural Information Processing Systems},
+  articleno = {313},
+  numpages  = {16},
+  location  = {New Orleans, LA, USA},
+  series    = {NIPS '22}
+}
+@inproceedings{metal_inpainting_cbct_projections,
+  author    = {Mei, Siyuan and Fan, Fuxin and Maier, Andreas},
+  booktitle = {2023 IEEE 20th International Symposium on Biomedical Imaging (ISBI)},
+  title     = {Metal Inpainting in CBCT Projections Using Score-based Generative Model},
+  year      = {2023},
+  volume    = {},
+  number    = {},
+  pages     = {1-5},
+  keywords  = {Interpolation;Three-dimensional displays;Biological system modeling;Metals;Surgery;Implants;Prediction algorithms;Knee projection inpainting;score-based generative model;unsupervised learning},
+  doi       = {10.1109/ISBI53787.2023.10230638}
+}
+
+  @article{high_frequency_space_diffusion_model,
+  author   = {Cao, Chentao and Cui, Zhuo-Xu and Wang, Yue and Liu, Shaonan and Chen, Taijin and Zheng, Hairong and Liang, Dong and Zhu, Yanjie},
+  journal  = {IEEE Transactions on Medical Imaging},
+  title    = {High-Frequency Space Diffusion Model for Accelerated MRI},
+  year     = {2024},
+  volume   = {43},
+  number   = {5},
+  pages    = {1853-1865},
+  keywords = {Image reconstruction;Diffusion processes;Convergence;Mathematical models;Magnetic resonance imaging;Perturbation methods;Kernel;Diffusion models;MRI;image reconstruction;inverse problem},
+  doi      = {10.1109/TMI.2024.3351702}
+}
+@article{chen2019weakly,
+  title={Weakly Supervised Disentanglement by Pairwise Similarities},
+  author={Chen, Junxiang and Batmanghelich, Kayhan},
+  journal={arXiv preprint arXiv:1906.01044},
+  year={2019}
+}
+
+@inproceedings{multimodal_generative_models,
+author = {Wu, Mike and Goodman, Noah},
+title = {Multimodal generative models for scalable weakly-supervised learning},
+year = {2018},
+publisher = {Curran Associates Inc.},
+address = {Red Hook, NY, USA},
+abstract = {Multiple modalities often co-occur when describing natural phenomena. Learning a joint representation of these modalities should yield deeper and more useful representations. Previous generative approaches to multi-modal input either do not learn a joint distribution or require additional computation to handle missing data. Here, we introduce a multimodal variational autoencoder (MVAE) that uses a product-of-experts inference network and a sub-sampled training paradigm to solve the multi-modal inference problem. Notably, our model shares parameters to efficiently learn under any combination of missing modalities. We apply the MVAE on four datasets and match state-of-the-art performance using many fewer parameters. In addition, we show that the MVAE is directly applicable to weakly-supervised learning, and is robust to incomplete supervision. We then consider two case studies, one of learning image transformations—edge detection, colorization, segmentation—as a set of modalities, followed by one of machine translation between two languages. We find appealing results across this range of tasks.},
+booktitle = {Proceedings of the 32nd International Conference on Neural Information Processing Systems},
+pages = {5580–5590},
+numpages = {11},
+location = {Montr\'{e}al, Canada},
+series = {NIPS'18}
+}
+@article{suzuki2016joint,
+  title={Joint Multimodal Learning with Deep Generative Models},
+  author={Suzuki, Masahiro and Nakayama, Kotaro and Matsuo, Yutaka},
+  journal={arXiv preprint arXiv:1611.01891},
+  year={2016}
+}
+
+@InProceedings{xu2021viewcommon,
+  author    = {Xu, Jie and Ren, Yazhou and Tang, Huayi and Pu, Xiaorong and Zhu, Xiaofeng and Zeng, Ming and He, Lifang},
+  title= {Multi-{VAE}: Learning Disentangled View-Common and View-Peculiar Visual Representations for Multi-View Clustering},
+  booktitle = {Proceedings of the IEEE/CVF International Conference on Computer Vision (ICCV)},
+  year      = {2021},
+  pages     = {9234-9243}
+}
+@inproceedings{unsupervised_domain_adaptation_backprop,
+  author    = {Ganin, Yaroslav and Lempitsky, Victor},
+  title     = {Unsupervised domain adaptation by backpropagation},
+  year      = {2015},
+  publisher = {JMLR.org},
+  abstract  = {Top-performing deep architectures are trained on massive amounts of labeled data. In the absence of labeled data for a certain task, domain adaptation often provides an attractive option given that labeled data of similar nature but from a different domain (e.g. synthetic images) are available. Here, we propose a new approach to domain adaptation in deep architectures that can be trained on large amount of labeled data from the source domain and large amount of unlabeled data from the target domain (no labeled target-domain data is necessary).As the training progresses, the approach promotes the emergence of "deep" features that are (i) discriminative for the main learning task on the source domain and (ii) invariant with respect to the shift between the domains. We show that this adaptation behaviour can be achieved in almost any feed-forward model by augmenting it with few standard layers and a simple new gradient reversal layer. The resulting augmented architecture can be trained using standard back propagation.Overall, the approach can be implemented with little effort using any of the deep-learning packages. The method performs very well in a series of image classification experiments, achieving adaptation effect in the presence of big domain shifts and outperforming previous state-of-the-art on Office datasets.},
+  booktitle = {Proceedings of the 32nd International Conference on Machine Learning - Volume 37},
+  pages     = {1180–1189},
+  numpages  = {10},
+  location  = {Lille, France},
+  series    = {ICML'15}
+}
+
+@article{attribute_disentanglement,
+  title    = {Attribute disentanglement with gradient reversal for interactive fashion retrieval},
+  journal  = {Pattern Recognition Letters},
+  volume   = {172},
+  pages    = {203-212},
+  year     = {2023},
+  issn     = {0167-8655},
+  doi      = {https://doi.org/10.1016/j.patrec.2023.06.018},
+  url      = {https://www.sciencedirect.com/science/article/pii/S0167865523001976},
+  author   = {Giovanna Scaramuzzino and Federico Becattini and Alberto {Del Bimbo}},
+  keywords = {Attribute manipulation, Disentanglement, Fashion retrieval},
+  abstract = {Interactive fashion search is gaining more and more interest thanks to the rapid diffusion of online retailers. It allows users to browse fashion items and perform attribute manipulations, modifying parts or details of given garments. To successfully model and analyze garments at such a fine-grained level, it is necessary to obtain attribute-wise representations, separating information relative to different characteristics. In this work we propose an attribute disentanglement method based on attribute classifiers and the usage of gradient reversal layers. This combination allows us to learn attribute-specific features, removing unwanted details from each representation. We test the effectiveness of our learned features in a fashion attribute manipulation task, obtaining state of the art results. Furthermore, to favor training stability we present a novel loss balancing approach, preventing reversed losses to diverge during the optimization process.}
+}
+
+@inproceedings{ganin2015unsupervised,
+  title     = {Unsupervised Domain Adaptation by Backpropagation},
+  author    = {Ganin, Yaroslav and Lempitsky, Victor},
+  booktitle = {Proceedings of the 32nd International Conference on Machine Learning},
+  pages     = {1180--1189},
+  year      = {2015},
+  editor    = {Bach, Francis and Blei, David},
+  volume    = {37},
+  series    = {Proceedings of Machine Learning Research},
+  month     = {07--09 Jul},
+  publisher = {PMLR},
+  pdf       = {https://proceedings.mlr.press/v37/ganin15.pdf},
+  url       = {https://proceedings.mlr.press/v37/ganin15.html},
+  abstract  = {We propose an approach to domain adaptation in deep architectures based on a simple gradient reversal layer. The resulting training procedure encourages learned features that are discriminative for the main task while remaining invariant to unwanted domain information.}
+}
+
+@article{ganin2016domain,
+  title    = {Domain-Adversarial Training of Neural Networks},
+  author   = {Ganin, Yaroslav and Ustinova, Evgeniya and Ajakan, Hana and Germain, Pascal and Larochelle, Hugo and Laviolette, Fran{\c{c}}ois and Marchand, Mario and Lempitsky, Victor},
+  journal  = {Journal of Machine Learning Research},
+  volume   = {17},
+  number   = {59},
+  pages    = {1--35},
+  year     = {2016},
+  url      = {https://www.jmlr.org/papers/v17/15-239.html},
+  pdf      = {https://www.jmlr.org/papers/volume17/15-239/15-239.pdf},
+  abstract = {This paper formalizes domain-adversarial training and shows that a gradient reversal layer can be used to learn features that are discriminative for a main task while becoming invariant to an unwanted attribute.}
+}
+
+@inproceedings{funke2022disentanglement,
+  title     = {Disentanglement and Generalization Under Correlation Shifts},
+  author    = {Funke, Christina M. and Vicol, Paul and Wang, Kuan-chieh and Kuemmerer, Matthias and Zemel, Richard and Bethge, Matthias},
+  booktitle = {Proceedings of The 1st Conference on Lifelong Learning Agents},
+  pages     = {116--141},
+  year      = {2022},
+  editor    = {Chandar, Sarath and Pascanu, Razvan and Precup, Doina},
+  volume    = {199},
+  series    = {Proceedings of Machine Learning Research},
+  month     = {22--24 Aug},
+  publisher = {PMLR},
+  pdf       = {https://proceedings.mlr.press/v199/funke22a/funke22a.pdf},
+  url       = {https://proceedings.mlr.press/v199/funke22a.html},
+  abstract  = {Correlations between factors of variation are prevalent in real-world data. Exploiting such correlations may increase predictive performance on noisy data; however, often correlations are not robust (e.g., they may change between domains, datasets, or applications) and models that exploit them do not generalize when correlations shift. Disentanglement methods aim to learn representations which capture different factors of variation in latent subspaces. A common approach involves minimizing the mutual information between latent subspaces, such that each encodes a single underlying attribute. However, this fails when attributes are correlated. We solve this problem by enforcing independence between subspaces conditioned on the available attributes, which allows us to remove only dependencies that are not due to the correlation structure present in the training data. We achieve this via an adversarial approach to minimize the conditional mutual information (CMI) between subspaces with respect to categorical variables. We first show theoretically that CMI minimization is a good objective for robust disentanglement on linear problems. We then apply our method on real-world datasets based on MNIST and CelebA, and show that it yields models that are disentangled and robust under correlation shift, including in weakly supervised settings.}
+}
+
+@inproceedings{Higgins2016betaVAELB,
+  title     = {beta-VAE: Learning Basic Visual Concepts with a Constrained Variational Framework},
+  author    = {Irina Higgins and Lo{\"i}c Matthey and Arka Pal and Christopher P. Burgess and Xavier Glorot and Matthew M. Botvinick and Shakir Mohamed and Alexander Lerchner},
+  booktitle = {International Conference on Learning Representations},
+  year      = {2016},
+  url       = {https://api.semanticscholar.org/CorpusID:46798026}
+}
+
+@inproceedings{disentangling_by_factorising,
+  title     = {Disentangling by Factorising},
+  author    = {Kim, Hyunjik and Mnih, Andriy},
+  booktitle = {Proceedings of the 35th International Conference on Machine Learning},
+  pages     = {2649--2658},
+  year      = {2018},
+  editor    = {Dy, Jennifer and Krause, Andreas},
+  volume    = {80},
+  series    = {Proceedings of Machine Learning Research},
+  month     = {10--15 Jul},
+  publisher = {PMLR},
+  pdf       = {http://proceedings.mlr.press/v80/kim18b/kim18b.pdf},
+  url       = {https://proceedings.mlr.press/v80/kim18b.html},
+  abstract  = {We define and address the problem of unsupervised learning of disentangled representations on data generated from independent factors of variation. We propose FactorVAE, a method that disentangles by encouraging the distribution of representations to be factorial and hence independent across the dimensions. We show that it improves upon beta-VAE by providing a better trade-off between disentanglement and reconstruction quality and being more robust to the number of training iterations. Moreover, we highlight the problems of a commonly used disentanglement metric and introduce a new metric that does not suffer from them.}
+}
+
+@inproceedings{chen2020simple,
+  author    = {Ting Chen and Simon Kornblith and Mohammad Norouzi and Geoffrey Hinton},
+  title     = {A Simple Framework for Contrastive Learning of Visual Representations},
+  booktitle = {Proceedings of the 37th International Conference on Machine Learning},
+  year      = {2020},
+  pages     = {1597--1607},
+  publisher = {PMLR},
+  url       = {https://proceedings.mlr.press/v119/chen20j.html}
+}
+
+
+@misc{louiset2024sepvae,
+  author        = {Robin Louiset and Edouard Duchesnay and Antoine Grigis and Benoit Dufumier and Pietro Gori},
+  title         = {SepVAE: a contrastive VAE to separate pathological patterns from healthy ones},
+  year          = {2024},
+  eprint        = {2307.06206},
+  archiveprefix = {arXiv},
+  primaryclass  = {cs.CV},
+  url           = {https://arxiv.org/abs/2307.06206}
+}
+
+@misc{abid2019cvae,
+  author        = {Abubakar Abid and James Zou},
+  title         = {Contrastive Variational Autoencoder Enhances Salient Features},
+  year          = {2019},
+  eprint        = {1902.04601},
+  archiveprefix = {arXiv},
+  primaryclass  = {cs.LG},
+  doi           = {10.48550/arXiv.1902.04601},
+  url           = {https://arxiv.org/abs/1902.04601}
+}
+
+@misc{hsu2018pvae,
+  author        = {Wei-Ning Hsu and James Glass},
+  title         = {Disentangling by Partitioning: A Representation Learning Framework for Multimodal Sensory Data},
+  year          = {2018},
+  eprint        = {1805.11264},
+  archiveprefix = {arXiv},
+  primaryclass  = {stat.ML},
+  doi           = {10.48550/arXiv.1805.11264},
+  url           = {https://arxiv.org/abs/1805.11264}
+}
+
+@inproceedings{shi2019mmvae,
+  author    = {Yuge Shi and N. Siddharth and Brooks Paige and Philip H. S. Torr},
+  title     = {Variational Mixture-of-Experts Autoencoders for Multi-Modal Deep Generative Models},
+  booktitle = {Advances in Neural Information Processing Systems},
+  volume    = {32},
+  year      = {2019},
+  pdf       = {https://papers.nips.cc/paper_files/paper/2019/file/0ae775a8cb3b499ad1fca944e6f5c836-Paper.pdf},
+  url       = {https://proceedings.neurips.cc/paper/2019/hash/0ae775a8cb3b499ad1fca944e6f5c836-Abstract.html}
+}
+
+@inproceedings{martens2024sharedprivate,
+  author    = {Kaspar M{\"a}rtens and Christopher Yau},
+  title     = {Disentangling Shared and Private Latent Factors in Multimodal Variational Autoencoders},
+  booktitle = {Proceedings of the 18th Machine Learning in Computational Biology meeting},
+  pages     = {60--75},
+  year      = {2024},
+  editor    = {Knowles, David A. and Mostafavi, Sara},
+  volume    = {240},
+  series    = {Proceedings of Machine Learning Research},
+  publisher = {PMLR},
+  pdf       = {https://proceedings.mlr.press/v240/martens24a/martens24a.pdf},
+  url       = {https://proceedings.mlr.press/v240/martens24a.html}
+}
+
+@inproceedings{variational_diffusion_model,
+author = {Kingma, Diederik P. and Salimans, Tim and Poole, Ben and Ho, Jonathan},
+title = {Variational diffusion models},
+year = {2021},
+isbn = {9781713845393},
+publisher = {Curran Associates Inc.},
+address = {Red Hook, NY, USA},
+abstract = {Diffusion-based generative models have demonstrated a capacity for perceptually impressive synthesis, but can they also be great likelihood-based models? We answer this in the affirmative, and introduce a family of diffusion-based generative models that obtain state-of-the-art likelihoods on standard image density estimation benchmarks. Unlike other diffusion-based models, our method allows for efficient optimization of the noise schedule jointly with the rest of the model. We show that the variational lower bound (VLB) simplifies to a remarkably short expression in terms of the signal-to-noise ratio of the diffused data, thereby improving our theoretical understanding of this model class. Using this insight, we prove an equivalence between several models proposed in the literature. In addition, we show that the continuous-time VLB is invariant to the noise schedule, except for the signal-to-noise ratio at its endpoints. This enables us to learn a noise schedule that minimizes the variance of the resulting VLB estimator, leading to faster optimization. Combining these advances with architectural improvements, we obtain state-of-the-art likelihoods on image density estimation benchmarks, outperforming autoregressive models that have dominated these benchmarks for many years, with often significantly faster optimization. In addition, we show how to use the model as part of a bits-back compression scheme, and demonstrate lossless compression rates close to the theoretical optimum.},
+booktitle = {Proceedings of the 35th International Conference on Neural Information Processing Systems},
+articleno = {1660},
+numpages = {12},
+series = {NIPS '21}
+}
+
+@misc{podell2023sdxl,
+      title={SDXL: Improving Latent Diffusion Models for High-Resolution Image Synthesis}, 
+      author={Dustin Podell and Zion English and Kyle Lacey and Andreas Blattmann and Tim Dockhorn and Jonas Müller and Joe Penna and Robin Rombach},
+      year={2023},
+      eprint={2307.01952},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV},
+      url={https://arxiv.org/abs/2307.01952}, 
+}
+@inproceedings{the_clip_model_is_secretly_an_image_to_prompt_converter,
+author = {Ding, Yuxuan and Tian, Chunna and Ding, Haoxuan and Liu, Lingqiao},
+title = {The CLIP model is secretly an image-to-prompt converter},
+year = {2023},
+publisher = {Curran Associates Inc.},
+address = {Red Hook, NY, USA},
+abstract = {The Stable Diffusion model is a prominent text-to-image generation model that relies on a text prompt as its input, which is encoded using the Contrastive Language-Image Pre-Training (CLIP). However, text prompts have limitations when it comes to incorporating implicit information from reference images. Existing methods have attempted to address this limitation by employing expensive training procedures involving millions of training samples for image-to-image generation. In contrast, this paper demonstrates that the CLIP model, as utilized in Stable Diffusion, inherently possesses the ability to instantaneously convert images into text prompts. Such an image-to-prompt conversion can be achieved by utilizing a linear projection matrix that is calculated in a closed form. Moreover, the paper showcases that this capability can be further enhanced by either utilizing a small amount of similar-domain training data (approximately 100 images) or incorporating several online training steps (around 30 iterations) on the reference images. By leveraging these approaches, the proposed method offers a simple and flexible solution to bridge the gap between images and text prompts. This methodology can be applied to various tasks such as image variation and image editing, facilitating more effective and seamless interaction between images and textual prompts.},
+booktitle = {Proceedings of the 37th International Conference on Neural Information Processing Systems},
+articleno = {2456},
+numpages = {12},
+location = {New Orleans, LA, USA},
+series = {NIPS '23}
+}
+
+@article{tutorial_on_diffusion_models,
+author = {Chan, Stanley},
+title = {Tutorial on Diffusion Models for Imaging and Vision},
+year = {2024},
+issue_date = {Dec 2024},
+publisher = {Now Publishers Inc.},
+address = {Hanover, MA, USA},
+volume = {16},
+number = {4},
+issn = {1572-2740},
+url = {https://doi.org/10.1561/0600000112},
+doi = {10.1561/0600000112},
+abstract = {The astonishing growth of generative tools in recent years has empowered many exciting applications in text-to-image generation and text-to-video generation. The underlying principle behind these generative tools is the concept of diffusion, a particular sampling mechanism that has overcome some longstanding shortcomings in previous approaches. The goal of this tutorial is to discuss the essential ideas underlying these diffusion models. The target audience of this tutorial includes undergraduate and graduate students who are interested in doing research on diffusion models or applying these tools to solve other problems.},
+journal = {Found. Trends. Comput. Graph. Vis.},
+month = dec,
+pages = {322–471},
+numpages = {162}
+}
+@inproceedings{kingma2014semi,
+  author    = {Diederik P. Kingma and Danilo Rezende and Shakir Mohamed and Max Wierstra},
+  title     = {Semi-Supervised Learning with Deep Generative Models},
+  booktitle = {Advances in Neural Information Processing Systems},
+  volume    = {27},
+  year      = {2014},
+  publisher = {Curran Associates, Inc.},
+  url       = {https://proceedings.neurips.cc/paper/2014/hash/d523773c6b194f37b938d340d5d02232-Abstract.html}
+}
+
+
+@inproceedings{challeau2019challenging,
+  title     = {Challenging Common Assumptions in the Unsupervised Learning of Disentangled Representations},
+  author    = {Francesco Locatello and Stefan Bauer and Mario Lučić and Gunnar Rätsch and Sylvain Gelly and Bernhard Schölkopf and Olivier Frederic Bachem},
+  year      = {2019},
+  url       = {http://proceedings.mlr.press/v97/locatello19a.html},
+  note      = {Best Paper Award},
+  booktitle = {International Conference on Machine Learning}
+}
+
+@inproceedings{weakly_supervised_disentanglement,
+  title     = {Weakly-Supervised Disentanglement Without Compromises},
+  author    = {Locatello, Francesco and Poole, Ben and Raetsch, Gunnar and Sch{\"o}lkopf, Bernhard and Bachem, Olivier and Tschannen, Michael},
+  booktitle = {Proceedings of the 37th International Conference on Machine Learning},
+  pages     = {6348--6359},
+  year      = {2020},
+  editor    = {III, Hal Daumé and Singh, Aarti},
+  volume    = {119},
+  series    = {Proceedings of Machine Learning Research},
+  month     = {13--18 Jul},
+  publisher = {PMLR},
+  pdf       = {http://proceedings.mlr.press/v119/locatello20a/locatello20a.pdf},
+  url       = {https://proceedings.mlr.press/v119/locatello20a.html},
+  abstract  = {Intelligent agents should be able to learn useful representations by observing changes in their environment. We model such observations as pairs of non-i.i.d. images sharing at least one of the underlying factors of variation. First, we theoretically show that only knowing how many factors have changed, but not which ones, is sufficient to learn disentangled representations. Second, we provide practical algorithms that learn disentangled representations from pairs of images without requiring annotation of groups, individual factors, or the number of factors that have changed. Third, we perform a large-scale empirical study and show that such pairs of observations are sufficient to reliably learn disentangled representations on several benchmark data sets. Finally, we evaluate our learned representations and find that they are simultaneously useful on a diverse suite of tasks, including generalization under covariate shifts, fairness, and abstract reasoning. Overall, our results demonstrate that weak supervision enables learning of useful disentangled representations in realistic scenarios.}
+}
+
+
+@article{disentengaled_representation_learning,
+  author     = {Wang, Xin and Chen, Hong and Tang, Si'ao and Wu, Zihao and Zhu, Wenwu},
+  title      = {Disentangled Representation Learning},
+  year       = {2024},
+  issue_date = {Dec. 2024},
+  publisher  = {IEEE Computer Society},
+  address    = {USA},
+  volume     = {46},
+  number     = {12},
+  issn       = {0162-8828},
+  url        = {https://doi.org/10.1109/TPAMI.2024.3420937},
+  doi        = {10.1109/TPAMI.2024.3420937},
+  abstract   = {Disentangled Representation Learning (DRL) aims to learn a model capable of identifying and disentangling the underlying factors hidden in the observable data in representation form. The process of separating underlying factors of variation into variables with semantic meaning benefits in learning explainable representations of data, which imitates the meaningful understanding process of humans when observing an object or relation. As a general learning strategy, DRL has demonstrated its power in improving the model explainability, controlability, robustness, as well as generalization capacity in a wide range of scenarios such as computer vision, natural language processing, and data mining. In this article, we comprehensively investigate DRL from various aspects including motivations, definitions, methodologies, evaluations, applications, and model designs. We first present two well-recognized definitions, i.e., Intuitive Definition and Group Theory Definition for disentangled representation learning. We further categorize the methodologies for DRL into four groups from the following perspectives, the model type, representation structure, supervision signal, and independence assumption. We also analyze principles to design different DRL models that may benefit different tasks in practical applications. Finally, we point out challenges in DRL as well as potential research directions deserving future investigations. We believe this work may provide insights for promoting the DRL research in the community.},
+  journal    = {IEEE Trans. Pattern Anal. Mach. Intell.},
+  month      = dec,
+  pages      = {9677–9696},
+  numpages   = {20}
+}
+
+@inproceedings{clip_inverter,
+  author    = {Ding, Yuxuan and Tian, Chunna and Ding, Haoxuan and Liu, Lingqiao},
+  booktitle = {Advances in Neural Information Processing Systems},
+  editor    = {A. Oh and T. Naumann and A. Globerson and K. Saenko and M. Hardt and S. Levine},
+  pages     = {56298--56309},
+  publisher = {Curran Associates, Inc.},
+  title     = {The CLIP Model is Secretly an Image-to-Prompt Converter},
+  url       = {https://proceedings.neurips.cc/paper_files/paper/2023/file/b00ef390dcd5f147fd7c5c2bb35f09be-Paper-Conference.pdf},
+  volume    = {36},
+  year      = {2023}
+}
+
+
+@inproceedings{optimal_perceptual_inference,
+  added-at             = {2008-03-11T14:52:34.000+0100},
+  author               = {Hinton, Geoffrey E. and Sejnowski, Terrence J.},
+  biburl               = {https://www.bibsonomy.org/bibtex/249346852ab2da6e60c5ab1552b4840db/idsia},
+  booktitle            = {Proceedings of the {IEEE} Conference on Computer Vision and Pattern Recognition},
+  citeulike-article-id = {2377125},
+  interhash            = {5c61deeac4b02147602ac254eb6d048d},
+  intrahash            = {49346852ab2da6e60c5ab1552b4840db},
+  keywords             = {nn},
+  priority             = {2},
+  timestamp            = {2008-03-11T15:03:55.000+0100},
+  title                = {Optimal Perceptual Inference},
+  year                 = 1983
+}
+
+@article{vedantam2017generative,
+  title   = {Generative models of visually grounded imagination},
+  author  = {Vedantam, Ramakrishna and Fischer, Ian and Huang, Jonathan and Murphy, Kevin},
+  journal = {arXiv preprint arXiv:1705.10762},
+  year    = {2017}
+}
+
+@article{Higgins2017SCANLH,
+  title   = {SCAN: Learning Hierarchical Compositional Visual Concepts},
+  author  = {Irina Higgins and Nicolas Sonnerat and Lo{\"i}c Matthey and Arka Pal and Christopher P. Burgess and Matko Bosnjak and Murray Shanahan and Matthew M. Botvinick and Demis Hassabis and Alexander Lerchner},
+  journal = {arXiv: Machine Learning},
+  year    = {2017},
+  url     = {https://api.semanticscholar.org/CorpusID:7121887}
+}
+
+
+@inproceedings{NIPS2001_7b7a53e2,
+  author    = {Ng, Andrew and Jordan, Michael},
+  booktitle = {Advances in Neural Information Processing Systems},
+  editor    = {T. Dietterich and S. Becker and Z. Ghahramani},
+  pages     = {},
+  publisher = {MIT Press},
+  title     = {On Discriminative vs. Generative Classifiers: A comparison of logistic regression and naive Bayes},
+  url       = {https://proceedings.neurips.cc/paper_files/paper/2001/file/7b7a53e239400a13bd6be6c91c4f6c4e-Paper.pdf},
+  volume    = {14},
+  year      = {2001}
+}
+
+
+@article{fetaya2019understanding,
+  title   = {Understanding the limitations of conditional generative models},
+  author  = {Fetaya, Ethan and Jacobsen, J{\"o}rn-Henrik and Grathwohl, Will and Zemel, Richard},
+  journal = {arXiv preprint arXiv:1906.01171},
+  year    = {2019}
+}
+
+@inproceedings{generative_models_visually_grounded_imagination_2018,
+  author    = {Ramakrishna Vedantam and
+               Ian Fischer and
+               Jonathan Huang and
+               Kevin Murphy},
+  title     = {Generative Models of Visually Grounded Imagination},
+  booktitle = {6th International Conference on Learning Representations, {ICLR} 2018,
+               Vancouver, BC, Canada, April 30 - May 3, 2018, Conference Track Proceedings},
+  publisher = {OpenReview.net},
+  year      = {2018},
+  url       = {https://openreview.net/forum?id=HkCsm6lRb},
+  timestamp = {Thu, 25 Jul 2019 14:25:46 +0200},
+  biburl    = {https://dblp.org/rec/conf/iclr/VedantamFH018.bib},
+  bibsource = {dblp computer science bibliography, https://dblp.org}
+}
+
+
+@article{wang2024disentangled,
+  title     = {Disentangled representation learning},
+  author    = {Wang, Xin and Chen, Hong and Tang, Si'ao and Wu, Zihao and Zhu, Wenwu},
+  journal   = {IEEE Transactions on Pattern Analysis and Machine Intelligence},
+  volume    = {46},
+  number    = {12},
+  pages     = {9677--9696},
+  year      = {2024},
+  publisher = {IEEE}
+}
+
+@article{majellaro2024explicitly,
+  title   = {Explicitly disentangled representations in object-centric learning},
+  author  = {Majellaro, Riccardo and Collu, Jonathan and Plaat, Aske and Moerland, Thomas M},
+  journal = {arXiv preprint arXiv:2401.10148},
+  year    = {2024}
+}
+
+@article{song2021train,
+  title   = {How to train your energy-based models},
+  author  = {Song, Yang and Kingma, Diederik P},
+  journal = {arXiv preprint arXiv:2101.03288},
+  year    = {2021}
+}
+
+@article{kingma2019introduction,
+  title     = {An introduction to variational autoencoders},
+  author    = {Kingma, Diederik P and Welling, Max and others},
+  journal   = {Foundations and Trends{\textregistered} in Machine Learning},
+  volume    = {12},
+  number    = {4},
+  pages     = {307--392},
+  year      = {2019},
+  publisher = {Now Publishers, Inc.}
+}
+
+@article{kingma2013auto,
+  title   = {Auto-encoding variational bayes},
+  author  = {Kingma, Diederik P and Welling, Max},
+  journal = {arXiv preprint arXiv:1312.6114},
+  year    = {2013}
+}
+@inproceedings{product_of_experts,
+  author    = {Hinton, G.E.},
+  booktitle = {1999 Ninth International Conference on Artificial Neural Networks ICANN 99. (Conf. Publ. No. 470)},
+  title     = {Products of experts},
+  year      = {1999},
+  volume    = {1},
+  number    = {},
+  pages     = {1-6 vol.1},
+  keywords  = {},
+  doi       = {10.1049/cp:19991075}
+}
+
+@inproceedings{NEURIPS2019_378a063b,
+  author    = {Du, Yilun and Mordatch, Igor},
+  booktitle = {Advances in Neural Information Processing Systems},
+  editor    = {H. Wallach and H. Larochelle and A. Beygelzimer and F. d\textquotesingle Alch\'{e}-Buc and E. Fox and R. Garnett},
+  pages     = {},
+  publisher = {Curran Associates, Inc.},
+  title     = {Implicit Generation and Modeling with Energy Based Models},
+  url       = {https://proceedings.neurips.cc/paper_files/paper/2019/file/378a063b8fdb1db941e34f4bde584c7d-Paper.pdf},
+  volume    = {32},
+  year      = {2019}
+}
+
+@inproceedings{bayesian_learning_sgld,
+  author    = {Max Welling and
+               Yee Whye Teh},
+  editor    = {Lise Getoor and
+               Tobias Scheffer},
+  title     = {Bayesian Learning via Stochastic Gradient Langevin Dynamics},
+  booktitle = {Proceedings of the 28th International Conference on Machine Learning,
+               {ICML} 2011, Bellevue, Washington, USA, June 28 - July 2, 2011},
+  pages     = {681--688},
+  publisher = {Omnipress},
+  year      = {2011},
+  url       = {https://icml.cc/2011/papers/398\_icmlpaper.pdf},
+  timestamp = {Wed, 03 Apr 2019 17:43:35 +0200},
+  biburl    = {https://dblp.org/rec/conf/icml/WellingT11.bib},
+  bibsource = {dblp computer science bibliography, https://dblp.org}
+}
+@article{superresolution_via_iterative_refinement,
+  author   = {Saharia, Chitwan and Ho, Jonathan and Chan, William and Salimans, Tim and Fleet, David J. and Norouzi, Mohammad},
+  journal  = {IEEE Transactions on Pattern Analysis and Machine Intelligence},
+  title    = {Image Super-Resolution via Iterative Refinement},
+  year     = {2023},
+  volume   = {45},
+  number   = {4},
+  pages    = {4713-4726},
+  keywords = {Noise reduction;Superresolution;Task analysis;Iterative methods;Data models;Faces;Diffusion processes;Image super-resolution;diffusion models;deep generative models},
+  doi      = {10.1109/TPAMI.2022.3204461}
+}
+
+@article{Nyamawe2026OnTU,
+  title   = {On the use of synthetic data for healthcare AI in Africa: Technical performance, governance challenges, and policy readiness},
+  author  = {Ally Nyamawe and Donald Shao Shao},
+  journal = {Digital Health},
+  year    = {2026},
+  volume  = {12},
+  url     = {https://api.semanticscholar.org/CorpusID:285124858}
+}
+@article{GROGER2025100220,
+  title    = {A review and systematic guide to counteracting medical data scarcity for AI applications},
+  journal  = {Computer Methods and Programs in Biomedicine Update},
+  volume   = {8},
+  pages    = {100220},
+  year     = {2025},
+  issn     = {2666-9900},
+  doi      = {https://doi.org/10.1016/j.cmpbup.2025.100220},
+  url      = {https://www.sciencedirect.com/science/article/pii/S266699002500045X},
+  author   = {Fabian Gröger and Ludovic Amruthalingam and Simone Lionetti and Alexander A. Navarini and Fabian Ille and Marc Pouly},
+  keywords = {Artificial intelligence, Machine learning, Deep learning, Data scarcity, Medical data},
+  abstract = {Artificial intelligence has the potential to improve the scalability, objectivity, and precision of the overall healthcare system. Such improvements are possible due to the growth of medical databases and the progress of deep learning approaches, which enable automated analysis of both structured and unstructured data. While the overall size of medical datasets continues to increase, data scarcity remains problematic due to challenges in the medical domain, such as rare diseases, difficult and expensive annotation, and restricted population coverage. Machine learning models trained without appropriate measures to counteract this scarcity are often biased and unreliable in real-world settings. This paper will systematically examine the different challenges arising from medical data scarcity, their implications, and state-of-the-art mitigation approaches. It includes studies from the general machine learning community and describes how their findings translate to medical applications. This review is meant as a practical resource for researchers who want to develop reliable machine learning models for medical applications when data is scarce.}
+}
+@article{HOLSTE2024103224,
+  title    = {Towards long-tailed, multi-label disease classification from chest X-ray: Overview of the CXR-LT challenge},
+  journal  = {Medical Image Analysis},
+  volume   = {97},
+  pages    = {103224},
+  year     = {2024},
+  issn     = {1361-8415},
+  doi      = {https://doi.org/10.1016/j.media.2024.103224},
+  url      = {https://www.sciencedirect.com/science/article/pii/S136184152400149X},
+  author   = {Gregory Holste and Yiliang Zhou and Song Wang and Ajay Jaiswal and Mingquan Lin and Sherry Zhuge and Yuzhe Yang and Dongkyun Kim and Trong-Hieu Nguyen-Mau and Minh-Triet Tran and Jaehyup Jeong and Wongi Park and Jongbin Ryu and Feng Hong and Arsh Verma and Yosuke Yamagishi and Changhyun Kim and Hyeryeong Seo and Myungjoo Kang and Leo Anthony Celi and Zhiyong Lu and Ronald M. Summers and George Shih and Zhangyang Wang and Yifan Peng},
+  keywords = {Chest X-ray, Long-tailed learning, Computer-aided diagnosis},
+  abstract = {Many real-world image recognition problems, such as diagnostic medical imaging exams, are “long-tailed” – there are a few common findings followed by many more relatively rare conditions. In chest radiography, diagnosis is both a long-tailed and multi-label problem, as patients often present with multiple findings simultaneously. While researchers have begun to study the problem of long-tailed learning in medical image recognition, few have studied the interaction of label imbalance and label co-occurrence posed by long-tailed, multi-label disease classification. To engage with the research community on this emerging topic, we conducted an open challenge, CXR-LT, on long-tailed, multi-label thorax disease classification from chest X-rays (CXRs). We publicly release a large-scale benchmark dataset of over 350,000 CXRs, each labeled with at least one of 26 clinical findings following a long-tailed distribution. We synthesize common themes of top-performing solutions, providing practical recommendations for long-tailed, multi-label medical image classification. Finally, we use these insights to propose a path forward involving vision-language foundation models for few- and zero-shot disease classification.}
+}
+@inproceedings{LeCun2006ATO,
+  title  = {A Tutorial on Energy-Based Learning},
+  author = {Yann LeCun and Sumit Chopra and Raia Hadsell and Aurelio Ranzato and Fu Jie Huang},
+  year   = {2006},
+  url    = {https://api.semanticscholar.org/CorpusID:8531544}
+}
+@inproceedings{NIPS2014_f033ed80,
+  author    = {Goodfellow, Ian J. and Pouget-Abadie, Jean and Mirza, Mehdi and Xu, Bing and Warde-Farley, David and Ozair, Sherjil and Courville, Aaron and Bengio, Yoshua},
+  booktitle = {Advances in Neural Information Processing Systems},
+  editor    = {Z. Ghahramani and M. Welling and C. Cortes and N. Lawrence and K.Q. Weinberger},
+  pages     = {},
+  publisher = {Curran Associates, Inc.},
+  title     = {Generative Adversarial Nets},
+  url       = {https://proceedings.neurips.cc/paper_files/paper/2014/file/f033ed80deb0234979a61f95710dbe25-Paper.pdf},
+  volume    = {27},
+  year      = {2014}
+}
+
+@misc{kingma2018glow,
+  title         = {Glow: Generative Flow with Invertible 1x1 Convolutions},
+  author        = {Diederik P. Kingma and Prafulla Dhariwal},
+  year          = {2018},
+  eprint        = {1807.03039},
+  archiveprefix = {arXiv},
+  primaryclass  = {stat.ML}
+}
+
+@article{dinh2016density,
+  title   = {Density estimation using real nvp},
+  author  = {Dinh, Laurent and Sohl-Dickstein, Jascha and Bengio, Samy},
+  journal = {arXiv preprint arXiv:1605.08803},
+  year    = {2016}
+}
+
+@inproceedings{NEURIPS2021_5db60c98,
+  author    = {Wu, Qitian and Gao, Rui and Zha, Hongyuan},
+  booktitle = {Advances in Neural Information Processing Systems},
+  editor    = {M. Ranzato and A. Beygelzimer and Y. Dauphin and P.S. Liang and J. Wortman Vaughan},
+  pages     = {11274--11286},
+  publisher = {Curran Associates, Inc.},
+  title     = {Bridging Explicit and Implicit Deep Generative Models via Neural Stein Estimators},
+  url       = {https://proceedings.neurips.cc/paper_files/paper/2021/file/5db60c98209913790e4fcce4597ee37c-Paper.pdf},
+  volume    = {34},
+  year      = {2021}
+}
+
+
+@inproceedings{pmlr-v32-rezende14,
+  title     = {Stochastic Backpropagation and Approximate Inference in Deep Generative Models},
+  author    = {Rezende, Danilo Jimenez and Mohamed, Shakir and Wierstra, Daan},
+  booktitle = {Proceedings of the 31st International Conference on Machine Learning},
+  pages     = {1278--1286},
+  year      = {2014},
+  editor    = {Xing, Eric P. and Jebara, Tony},
+  volume    = {32},
+  number    = {2},
+  series    = {Proceedings of Machine Learning Research},
+  address   = {Bejing, China},
+  month     = {22--24 Jun},
+  publisher = {PMLR},
+  pdf       = {http://proceedings.mlr.press/v32/rezende14.pdf},
+  url       = {https://proceedings.mlr.press/v32/rezende14.html},
+  abstract  = {We marry ideas from deep neural networks and approximate Bayesian inference to derive a generalised class of deep, directed generative models, endowed with a new algorithm for scalable inference and learning.   Our algorithm introduces a recognition model to represent an approximate posterior distribution and uses this for optimisation of a variational lower bound.  We develop stochastic backpropagation – rules for gradient backpropagation through stochastic variables – and   derive an algorithm that allows for joint optimisation of the parameters of both the generative and recognition models.  We demonstrate on several real-world data sets that by using stochastic backpropagation and variational inference, we obtain models that are able to  generate realistic samples of data, allow for accurate imputations of missing data, and provide a useful tool for high-dimensional data visualisation.}
+}
+
+
+@article{radford2019language,
+  added-at  = {2024-11-15T12:44:17.000+0100},
+  author    = {Radford, Alec and Wu, Jeffrey and Child, Rewon and Luan, David and Amodei, Dario and Sutskever, Ilya},
+  biburl    = {https://www.bibsonomy.org/bibtex/233e4b003b64b1060334660fbf6db1f3f/albinzehe},
+  interhash = {b926ece39c03cdf5499f6540cf63babd},
+  intrahash = {33e4b003b64b1060334660fbf6db1f3f},
+  journal   = {OpenAI},
+  keywords  = {gpt gpt2 languagemodelling transferlearning transformer},
+  note      = {Accessed: 2024-11-15},
+  timestamp = {2024-11-15T12:44:17.000+0100},
+  title     = {Language Models are Unsupervised Multitask Learners},
+  url       = {https://cdn.openai.com/better-language-models/language_models_are_unsupervised_multitask_learners.pdf},
+  year      = 2019
+}
+
+@article{papamakarios2021normalizing,
+  title   = {Normalizing flows for probabilistic modeling and inference},
+  author  = {Papamakarios, George and Nalisnick, Eric and Rezende, Danilo Jimenez and Mohamed, Shakir and Lakshminarayanan, Balaji},
+  journal = {Journal of Machine Learning Research},
+  volume  = {22},
+  number  = {57},
+  pages   = {1--64},
+  year    = {2021}
+}

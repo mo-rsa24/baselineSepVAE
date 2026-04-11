@@ -1,0 +1,140 @@
+% !TEX root = ../../../proposal.tex
+
+\subsection{Compositional Diffusion Models}
+\label{sec:compositional_diffusion}
+Single text-to-image diffusion models often fail when a prompt requires several factors to
+be combined correctly. Recent analyses \citep{t2i_compbench_2025, du2024compositional,
+mechanisms2025projective} show consistent errors in attribute binding, spatial relations,
+and numeracy, even when the image remains visually plausible. These failures arise because
+the models largely learn correlations in joint image-text data rather than an explicit
+factorized structure over objects, attributes, and relations \citep{t2i_compbench_2025}.
+In the proposed study, we refer to the conventional case in which a single natural-language prompt
+specifies all desired factors and the model attempts to realize them jointly as
+\emph{semantic composition}.
+
+The next three definitions review the main formulations of composition in this literature: the \emph{simple product}, \emph{Bayes composition}, and \emph{projective composition}. 
+The first two define composition by combining densities directly, while the third defines it through what the composed result should preserve.
+
+\subsubsection{Simple Product}
+
+The first definition is the \emph{simple product}. Given two distributions \(p_1\) and
+\(p_2\) over \(\mathbb{R}^n\), it defines the composition as
+\[
+    \hat p(x) \propto p_1(x)p_2(x).
+\]
+This is a familiar way to combine distributions, but it has an important limitation: the
+composed distribution cannot be truly out-of-distribution with respect to \(p_1\) or
+\(p_2\). If either \(p_1(x)=0\) or \(p_2(x)=0\), then \(\hat p(x)=0\) as well. As
+\citet{mechanisms2025projective} show, this becomes a problem when the desired
+composition lies outside the support of both source distributions. In their CLEVR example,
+if each source distribution contains only one object, then any image with \emph{both}
+objects has zero probability under both \(p_1\) and \(p_2\), so the simple product also
+assigns it zero probability. 
+
+\subsubsection{Bayes Composition}
+
+A second prior definition is \emph{Bayes composition}. 
+Rather than multiplying arbitrary densities, Bayes composition treats the component
+distributions as conditionals of a common underlying data distribution.~\citep{liu2022compositional,du2023reduce,du2024compositional,NEURIPS2020_49856ed4}.
+If \(c_1\) and \(c_2\) denote two conditions of interest, the
+desired composition is defined as
+\[
+    \hat p(x) := p(x \mid c_1, c_2).
+\]
+Assuming \(c_1\) and \(c_2\) are conditionally independent given \(x\), Bayes' rule gives
+\begin{equation}
+    \hat p(x)
+    = p(x \mid c_1, c_2)
+    \propto
+    \frac{p(x \mid c_1)\,p(x \mid c_2)}{p(x)}.
+    \label{eq:poe_dist}
+\end{equation}
+This formulation does not define a truly out-of-distribution composition
+\citep{mechanisms2025projective}, because it works when the desired conjunction already corresponds
+to a meaningful conditional under the training distribution, but cannot in general create a
+new conjunction that lies outside that support.
+
+For diffusion models, this composition is implemented at the level of the score.
+Taking \(\nabla_x \log\) of Equation~\ref{eq:poe_dist} gives
+\begin{equation}
+    \nabla_x \log \hat p(x \mid c_1, c_2)
+    =
+    \nabla_x \log p(x \mid c_1)
+    +
+    \nabla_x \log p(x \mid c_2)
+    -
+    \nabla_x \log p(x).
+    \label{eq:poe_score}
+\end{equation}
+Thus, the composed score is the sum of the two conditional scores minus the unconditional
+score.
+
+Using the score estimate in Equation~\ref{eq:score_noise}, the score
+composition in Equation~\ref{eq:poe_score} can be written directly in terms of noise predictions. Let
+\(\varepsilon_\theta(x_t,t,\varnothing)\) denote the unconditional prediction and
+\(\varepsilon_\theta(x_t,t,c_i)\) the prediction conditioned on concept \(c_i\). For a
+single condition, classifier-free guidance takes the form
+\[
+    \varepsilon_\theta(x_t,t,\varnothing)
+    +
+    w_i\bigl[\varepsilon_\theta(x_t,t,c_i)-\varepsilon_\theta(x_t,t,\varnothing)\bigr].
+\]
+Applying this construction to both concepts yields the practical AND operator used by
+\citet{liu2022compositional}:
+\begin{equation}
+    \tilde\varepsilon_{\mathrm{AND}}
+    =
+    \varepsilon_\theta(x_t,t,\varnothing)
+    +
+    w_1\bigl[\varepsilon_\theta(x_t,t,c_1)-\varepsilon_\theta(x_t,t,\varnothing)\bigr]
+    +
+    w_2\bigl[\varepsilon_\theta(x_t,t,c_2)-\varepsilon_\theta(x_t,t,\varnothing)\bigr].
+    \label{eq:and_operator}
+\end{equation}
+When \(w_1=w_2=1\), this reduces to
+\[
+    \varepsilon_\theta(x_t,t,c_1)
+    +
+    \varepsilon_\theta(x_t,t,c_2)
+    -
+    \varepsilon_\theta(x_t,t,\varnothing),
+\]
+which is exactly the Bayes composition written in noise-prediction form.
+
+\subsubsection{Projective Composition}
+\label{subsec:bg_projective}
+
+\citet{mechanisms2025projective} argue that a useful definition of composition must answer
+two separate questions: what the composed distribution should preserve, and when a practical
+compositional method can realize it. Their notion of \emph{projective composition} addresses
+the first question. Under this view, the composed distribution is judged by the part each
+source is meant to contribute. For example, if one source determines style and another
+content, then a composition is correct if it preserves the style of the first and the
+content of the second, even when neither source distribution contains that full combination.
+This is closely aligned with \citet{du2024compositional}, where composition is understood as
+building a new distribution from simpler components that each contribute part of the final
+structure.
+
+This matters because it allows composition that is out of distribution with respect to the
+source distributions being combined. The final sample can combine properties from different
+sources without needing to belong to any one source distribution as a whole. 
+As Figure~\ref{fig:projective_composition} illustrates, the composed distribution can differ
+from both source distributions in the original sample space while still matching each source
+after applying the corresponding projection.
+That is precisely what the simple product cannot express, since it is confined to overlapping
+support, and what Bayes composition cannot justify when the desired conjunction is not
+already supported by some underlying joint distribution.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.45\linewidth]{chapters/background/media/projective_composition.png}
+    \caption{Illustration of projective composition. The composed distribution \(\hat p\) need not coincide with either source distribution \(p_1\) or \(p_2\) in the original sample space. Instead, correctness is defined after applying source-specific projections: under \(\Pi_1\), the composed distribution matches the aspect preserved from \(p_1\), and under \(\Pi_2\), it matches the aspect preserved from \(p_2\). The figure therefore shows how a composition can be out of distribution with respect to the sources as whole distributions while still preserving the designated contribution of each source.}
+    \label{fig:projective_composition}
+\end{figure}
+
+The key implication is representational. 
+Standard disentanglement is not enough if concepts still interfere when one is changed. What composition requires is a stronger separation in which each concept acts on its own factor without perturbing the others. 
+\citet{mechanisms2025projective} further show that this separation need not appear in pixel space itself. 
+If it exists in some invertible latent space, then the same composition operator yields a correct projective composition with respect to those latent space factors. 
+This is a statement about when the target composition is well defined, not a guarantee that reverse-diffusion sampling will always recover it. 
+For the proposed study, the lesson is that compositional success depends on whether the learned representation allows the concepts to be preserved independently.

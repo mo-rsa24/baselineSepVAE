@@ -1,0 +1,119 @@
+% !TEX root = ../../proposal.tex
+
+\chapter{Introduction}
+\label{chap:introduction}
+
+Diffusion models \citep{song2021train,NEURIPS2020_4c5bcfec} have become a leading framework for high-fidelity generative modeling.
+Recent advances \citep{rombach2022high, BetkerImprovingIG} in text-to-image diffusion models have significantly improved the ability to generate highly realistic images.
+These capabilities have rapidly extended beyond vision to domains such as speech \citep{chen2020wavegrad}, medical image reconstruction \citep{metal_inpainting_cbct_projections, high_frequency_space_diffusion_model}, and natural language processing \citep{structured_denoising,diffusion_lm, argmax_flows}.
+Together, these developments position diffusion models as a general and increasingly universal framework for generating and manipulating complex data across modalities.
+
+Their strength comes from their iterative sampling process. 
+Instead of producing an output in a single step, a diffusion model starts from noise and refines it through a sequence of denoising updates. 
+This approach makes generation more stable and controllable than earlier architectures like GANs \citep{NIPS2014_f033ed80}. 
+This stability helps explain why diffusion models achieve such high sample quality across many diverse domains.
+
+This progress is especially important in medical imaging \citep{metal_inpainting_cbct_projections, high_frequency_space_diffusion_model}. 
+Diffusion models are now used for image denoising \citep{NEURIPS2020_4c5bcfec}, super-resolution \citep{superresolution_via_iterative_refinement}, and synthetic data generation \citep{rombach2022high}. 
+In low-resource clinical settings, these capabilities are particularly valuable because high-quality data are often scarce or expensive to obtain \citep{GROGER2025100220, Nyamawe2026OnTU}. 
+For example, hospitals may have many images of common single conditions but very few examples of rare co-morbid pathologies.
+A generative model that can produce anatomically plausible rare cases could therefore support critical downstream tasks through data augmentation \citep{HOLSTE2024103224}.
+
+One useful way to understand these models is through their connection to energy-based modeling \citep{LeCun2006ATO}. 
+In this view, the score function guides a noisy sample toward regions of high probability. 
+This perspective also suggests a route to compositional generation. 
+If separate models represent different conditions, their scores can be combined at inference time to form a joint generation process. 
+Prior work \citep{du2023reduce,du2024compositional,skreta2024superposition, NEURIPS2020_49856ed4} has shown that this makes it possible to compose concepts without retraining a new model for every combination.
+
+However, this compositional strategy does not reliably produce the intended result \citep{t2i_compbench_2025,mechanisms2025projective,du2024compositional}. 
+The ``logical composition'' defined by the mathematical operators often diverge from the ``semantic composition'' expressable by a single prompt. 
+In practice, this leads to failures such as incorrect attribute binding and interference between these concepts \citep{t2i_compbench_2025}. 
+In clinical imaging, these failures are especially serious because they can blur distinct pathologies or produce anatomically implausible scans. 
+This gap between logical and semantic composition is the central problem addressed in the proposed study.
+
+\citet{mechanisms2025projective} argue that composition cannot be defined purely in terms of the input distributions, and instead requires specifying which aspects of each distribution should be preserved in the composed result. 
+Their ``projective composition'' perspective suggests
+that success depends on whether the relevant factors can be separated in a suitable
+representation, not only on whether scores are added in the right way. 
+This suggests that the key issue is not only how composition is performed, but also how the underlying representations in the individual expert models are organised.
+If the factors remain entangled, the model does not expose the factorisation needed for successful composition.
+
+This reveals a broader unresolved question in compositional generative modeling. 
+Although there is substantial empirical work on controllable diffusion \citep{wu2024ifadapter, xing2024csgo}, the link between compositional success and representational factorisation remains underexplored. 
+Recent analyses \citep{mechanisms2025projective, du2024compositional, t2i_compbench_2025} suggest that compositional failures often arise because the learned representation does not keep the relevant factors sufficiently separate, so composition produces conflicts or incorrect associations instead of the intended semantic combination.
+Prior work on disentangled representation learning \citep{challeau2019challenging, traeuble2021disentangled} shows that recovering disentangled factors in unsupervised settings is fundamentally ill-posed without suitable inductive biases.
+These observations motivate the hypothesis that failures in compositional diffusion may arise from limitations of the learned representation rather than composition alone.
+
+Accordingly, the proposed study pursues three linked objectives and makes three corresponding contributions:
+
+\begin{enumerate}
+    \item \textbf{Characterising the composability gap.}
+    The study first develops a dynamics-based measurement framework for analysing how logical score-based composition diverges from semantic composition across different composition regimes. This yields a systematic account of when the gap emerges and identifies the scenarios in which composition produces consistent failures.
+
+    \item \textbf{Learning representations for composition.}
+    The study then introduces a novel weakly supervised partitioned VAE architecture designed to disentangle the latent space into factors that remain composable under downstream diffusion-based generation. This provides a controlled test of whether improved representational factorisation can reduce the composability gap.
+
+    \item \textbf{Demonstrating clinical utility for Out-Of-Distribution generation.}
+    The study finally applies this architecture to the synthesis of rare co-morbid chest X-rays from more abundant single-disease data, establishing a clinically meaningful low-resource use case for compositional diffusion. To our knowledge, this is the first study to investigate composable diffusion models for out-of-distribution generation in medical imaging.
+\end{enumerate}
+
+These objectives are operationalised through the three research phases summarised in Table~\ref{tab:phase_overview}.
+
+\begin{table}[htbp]
+    \centering
+    \caption{Research phases, objectives, and core assumptions.}
+    \label{tab:phase_overview}
+    \footnotesize
+    \renewcommand{\arraystretch}{1.05}
+    \setlength{\tabcolsep}{4pt}
+    \begin{tabularx}{\textwidth}{|>{\centering\arraybackslash}m{0.13\textwidth}|>{\raggedright\arraybackslash}p{0.37\textwidth}|>{\raggedright\arraybackslash}X|}
+        \hline
+        \rowcolor[HTML]{D9EDF7}
+        \textbf{Phase} & \textbf{Objective} & \textbf{Hypotheses} \\
+        \hline
+        \hyperref[sec:phase_1]{\textbf{Phase~1}} &
+        Characterise the composability gap by comparing logical and semantic composition across controlled concept-pair regimes. &
+        \begin{minipage}[t]{\hsize}
+            \vspace{1pt}
+            \begin{enumerate}[leftmargin=*, nosep]
+                \item Bayes-style score composition succeeds only when the model already contains a usable approximation to the desired joint configuration.
+                \item The severity of the composability gap varies systematically with the structure of the underlying concept pair.
+            \end{enumerate}
+            \vspace{1pt}
+        \end{minipage} \\
+        \hline
+        \hyperref[sec:phase_2]{\textbf{Phase~2}} &
+        Test whether more factorised latent representations reduce the composability gap in a controlled synthetic setting. &
+        \begin{minipage}[t]{\hsize}
+            \vspace{1pt}
+            \begin{enumerate}[leftmargin=*, nosep]
+                \item Known generative factors in dSprites \citep{dsprites17} and correlated dSprites provide a valid controlled test bed for held-out composition.
+                \item If representation quality limits composition, more factorised latent spaces should improve held-out composition under a fixed downstream evaluator.
+            \end{enumerate}
+            \vspace{1pt}
+        \end{minipage} \\
+        \hline
+        \hyperref[sec:phase_3]{\textbf{Phase~3}} &
+        Test whether partitioned clinical representations support plausible low-resource co-morbid chest X-ray generation. &
+        \begin{minipage}[t]{\hsize}
+            \vspace{1pt}
+            \begin{enumerate}[leftmargin=*, nosep]
+                \item Shared anatomical structure and disease-specific effects can be represented as separable components in the latent space.
+                \item Diseases can be composed from sufficiently factorized latent components.
+            \end{enumerate}
+            \vspace{1pt}
+        \end{minipage} \\
+        \hline
+    \end{tabularx}
+\end{table}
+
+
+The remainder of the proposal is organised as follows. Chapter~\ref{chap:background}
+reviews the technical background on VAEs, disentangled representation learning, diffusion
+models, and compositional diffusion. Chapter~\ref{chap:related_works} situates the
+proposal within prior work on compositional generation and medical image synthesis.
+Chapter~\ref{chap:research_objectives} states the research goals and hypotheses.
+Chapter~\ref{chap:research_method} presents the three-phase research method used to test
+them. Chapter~\ref{chap:research_plan} outlines the project timeline, success criteria,
+and expected challenges. Chapter~\ref{chap:conclusion} summarises the proposal and its
+expected contribution.

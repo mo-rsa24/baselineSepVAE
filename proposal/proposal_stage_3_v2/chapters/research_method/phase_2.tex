@@ -1,0 +1,185 @@
+% !TEX root = ../../proposal.tex
+
+\section{Phase 2: Explaining the Composability Gap}
+\label{sec:phase_2}
+
+Phase~1 characterised the composability gap across concept regimes. Phase~2 asks whether that gap is partly a representation problem. The key claim is that if composition is limited by the quality of the learned representation, then more factorised latent spaces should yield more reliable composition under the same downstream conditional diffusion setup.
+
+This distinction is difficult to test directly in a large pretrained model such as Stable Diffusion \citep{rombach2022high}, where the learned representation and the inference-time compositional method are tightly coupled. Phase~2 therefore moves to a controlled synthetic setting in which the representation can be varied while the downstream composition pipeline is kept fixed.
+This leads to a central claim:
+\begin{center}
+{\setlength{\fboxsep}{6pt}%
+\fbox{%
+\parbox{\dimexpr 0.96\linewidth - 2\fboxsep - 2\fboxrule\relax}{%
+\textbf{{If representation quality is a limiting factor for composition, then more factorised latent
+spaces should yield more reliable compositional generation under the same downstream conditional
+diffusion architecture.}
+}
+}}}
+\end{center}
+
+H2 is supported if better factorised latent spaces improve held-out composition under this shared evaluator.
+
+
+\subsection{Dataset Selection}
+\label{subsec:p2_testbeds}
+
+We use dSprites~\citep{dsprites17} and a correlated dSprites variant~\citep{roth2023disentanglement} because the underlying factors are known and held-out recombination can be measured directly. Standard dSprites serves as the positive control: orientation and scale are sampled independently, and one orientation--scale combination is removed from training. If a model fails to recover that held-out combination in this setting, the limitation is already present before support bias is introduced.
+
+\paragraph{Correlated dSprites:}
+Correlated dSprites keeps the visual domain unchanged but biases orientation--scale co-occurrence. Some combinations become common while others are rare or missing, creating a controlled setting in which the model can rely on shortcut correlations rather than learning the factors separately. This makes it well suited for testing whether better latent factorisation restores held-out composition.
+
+\subsection{Experiment Design}
+\label{subsec:p2_models}
+
+The experiment compares four regimes under the same downstream evaluation. Regimes~A and~B establish the baseline effect of changing the training support, Regime~C tests whether disentanglement or weak supervision recover performance in the correlated setting, and Regime~D tests whether explicit latent partitioning improves further.
+
+\subsubsection{Regime A: Control}
+
+Regime~A trains a baseline VAE on standard dSprites. It asks whether held-out recombination is feasible when the training support is factorised. Success here establishes that the task itself is valid before correlation is introduced.
+
+\subsubsection{Regime B:  Correlated dSprites Setting}
+
+Regime~B keeps the same baseline VAE but trains it on correlated dSprites. This isolates the effect of biased support: if performance drops relative to Regime~A, then the failure can be attributed to support-induced entanglement rather than a change in model family or evaluation rule.
+
+\subsubsection{Regime C: Disentangling Correlated dSprites}
+Regime~C keeps the correlated support of Regime~B but strengthens representation learning in two ways. C1 uses standard disentanglement models such as $\beta$-VAE and FactorVAE. C2 adds weak supervision on orientation and scale through training-time auxiliary heads while leaving the latent space shared. This regime tests whether stronger independence pressure or limited supervision alone can recover held-out composition under correlation.
+
+\subsubsection{Regime D: Partitioned Representation}
+\label{subsec:p2_spvae}
+
+Regime~D keeps the same correlated support and matched supervision as C2, but replaces the shared latent with a partitioned representation. The latent code is organised as \(z=(z_c,z_{d1},z_{d2})\), where \(z_c\) stores shared context, \(z_{d1}\) orientation, and \(z_{d2}\) scale. If Regime~D improves beyond C2, the gain is most plausibly due to explicit factor-addressable structure rather than supervision alone.
+
+\subsection{Evaluation}
+\label{subsec:p2_eval}
+
+Phase~2 evaluates H2 in two stages. First, it asks whether each regime learns a latent representation that is more clearly aligned with the known dSprites factors. Second, it asks whether any representational improvement translates into better recovery of withheld orientation--scale combinations under the same downstream conditional latent diffusion setup. The first stage therefore evaluates representation quality; the second evaluates whether that representation is actually useful for recombination.
+
+\subparagraph{DCI.}
+We use DCI~\citep{eastwood2018framework,challeau2019challenging} as the first-stage representation metric because it measures how strongly the learned latent code aligns with the ground-truth generative factors. This is the central representational question in Phase~2. All regimes are trained on the same visual domain and are evaluated on the same downstream recombination task, so DCI provides a common probe-based summary of how factor-aligned each learned code is.
+
+DCI is useful here because its three components answer three distinct questions. \emph{Disentanglement} asks whether an individual latent dimension is used mainly for one factor rather than several. \emph{Completeness} asks whether a given factor is concentrated in a small part of the code rather than spread broadly across many dimensions. \emph{Informativeness} asks whether the code preserves enough information to recover the true factors at all. Taken together, these scores distinguish a code that is merely predictive from one that is also well organised.
+
+The regime-level interpretation is direct. In Regime~A, DCI acts as a positive-control check under factorised support. In Regime~B, it tests whether correlated support weakens factor alignment. In Regime~C, it tests whether stronger disentanglement objectives or weak supervision recover that alignment. In Regime~D, it tests whether explicit latent partitioning yields a more factor-addressable code than a single shared latent space.
+
+For DCI, each evaluation image \(x^{(i)}\) is encoded into a deterministic representation
+\[
+h^{(i)}=(h^{(i)}_1,\dots,h^{(i)}_K).
+\]
+We use a deterministic code rather than a sampled latent so that the evaluation is not affected by reparameterisation noise. Concretely, for Regimes~A--C we set \(h^{(i)}=\mu_\phi(x^{(i)})\), the encoder posterior mean. For Regime~D, whose latent is partitioned as \(z=(z_c,z_{d1},z_{d2})\), we use the concatenated posterior means
+\[
+h^{(i)}=\bigl[\mu_c(x^{(i)}),\mu_{d1}(x^{(i)}),\mu_{d2}(x^{(i)})\bigr].
+\]
+This keeps the DCI input deterministic and comparable across regimes while preserving Regime~D's structural allocation.
+
+Each example also has known ground-truth factor labels
+\[
+c^{(i)}=(c^{(i)}_1,\dots,c^{(i)}_J).
+\]
+We compute DCI using all ground-truth dSprites factors available in the dataset, namely shape, scale, orientation, and position, while focusing the interpretation on orientation and scale because these are the factors used in the withheld recombination task. This avoids overstating factor separation by evaluating only the target pair.
+
+Following \citet{eastwood2018framework}, we fit one supervised predictor per factor using the latent code \(h\) as input. We use gradient-boosted tree predictors throughout because they can model nonlinear latent--factor relations while also yielding a feature-importance score for each latent dimension. The same probe family, training split, and hyperparameter-selection procedure are used for every regime so that DCI differences reflect changes in the learned representation rather than changes in the evaluator.
+
+Let \(R_{kj}\) denote the importance assigned to latent dimension \(h_k\) when predicting factor \(c_j\). Collecting these importances across all factors yields the importance matrix
+\[
+R=
+\begin{bmatrix}
+R_{11} & R_{12} & \cdots & R_{1J}\\
+R_{21} & R_{22} & \cdots & R_{2J}\\
+\vdots & \vdots & \ddots & \vdots\\
+R_{K1} & R_{K2} & \cdots & R_{KJ}
+\end{bmatrix}.
+\]
+Each column shows which latent dimensions matter for one factor, while each row shows how one latent dimension is used across factors. After fitting the factor predictors, we extract their feature importances, place them into \(R\), and then summarise the concentration structure of the rows and columns.
+
+For intuition, consider only the two target factors, orientation and scale. A row such as \((0.90,0.10)\) indicates that one latent dimension contributes strongly to orientation prediction and only weakly to scale prediction. A different row such as \((0.10,0.85)\) indicates the opposite. This is the kind of pattern expected from a well-factorised representation. By contrast, a row such as \((0.50,0.50)\) suggests that the same latent dimension is being used for both factors, which is less desirable if the goal is clean factor separation.
+
+\emph{DCI disentanglement} asks whether the predictive role of each latent dimension is concentrated on one factor or spread across several. For each latent dimension \(h_k\), we therefore normalise its importance scores across factors:
+\[
+D=\sum_{k=1}^{K}\rho_k\bigl(1-H(P_k)\bigr),
+\qquad
+P_{kj}=\frac{R_{kj}}{\sum_{j'}R_{kj'}},
+\qquad
+\rho_k=\frac{\sum_j R_{kj}}{\sum_{k',j}R_{k'j}}.
+\]
+Here \(P_k\) is the normalised \(k\)-th row of \(R\), so \(P_{kj}\) gives the fraction of latent dimension \(h_k\)'s total predictive importance that is assigned to factor \(c_j\). The quantity \(H(P_k)\) is the entropy of that row, normalised to lie in \([0,1]\). Low entropy means that the row is concentrated on one factor, so that latent contributes strongly to disentanglement. High entropy means that the same latent is used more evenly across several factors, so its disentanglement contribution is lower. The weight \(\rho_k\) ensures that latents which contribute very little overall do not dominate the score.
+
+\emph{DCI completeness} asks the complementary question: for a fixed factor, is its predictive signal concentrated in a small number of latent dimensions or spread across many? For each factor \(c_j\), we normalise the corresponding column of the importance matrix:
+\[
+C=\frac{1}{J}\sum_{j=1}^{J}\bigl(1-H(Q_j)\bigr),
+\qquad
+Q_{jk}=\frac{R_{kj}}{\sum_{k'}R_{k'j}}.
+\]
+Here \(Q_j\) is the normalised \(j\)-th column of \(R\), so \(Q_{jk}\) measures how much of factor \(c_j\)'s predictive signal comes from latent dimension \(h_k\). If the orientation column is dominated by one latent dimension and the remaining latents contribute only weakly, completeness for orientation is high. If orientation is instead spread broadly across many latents, completeness is lower. In plain terms, completeness is high when a factor is concentrated in a small part of the code rather than distributed diffusely across it.
+
+\emph{DCI informativeness} measures how well the latent code predicts the true factors overall. In our setting, the factors are discrete, so we report informativeness using held-out classification accuracy for each factor predictor, together with the mean accuracy across factors. This matters because a code can appear tidy while still failing to preserve enough information to recover the true attributes. Informativeness therefore checks whether the representation is actually usable, not only whether it appears structurally clean.
+
+% In practice, DCI is computed on a held-out evaluation split. Predictor training, model selection, and final scoring are separated so that the reported scores reflect generalisable factor information rather than probe overfitting. We report regime-wise means and variability across random seeds. For Regime~D, we compute DCI primarily on the full concatenated deterministic code so that it remains directly comparable to Regimes~A--C; however, because Regime~D is explicitly partitioned, we also inspect the factor-wise importance patterns within the intended subspaces to verify that orientation is concentrated in \(z_{d1}\) and scale in \(z_{d2}\), rather than concluding this solely from a single global summary.
+Taken together, DCI asks whether each latent dimension mainly captures one factor, whether each factor is concentrated in a small number of latent dimensions, and whether the code preserves enough information to recover the true factors at all. If correlated support causes the baseline VAE to mix orientation and scale across the code, disentanglement and completeness should decline relative to Regime~A. If later regimes restore clearer factor alignment, those scores should improve. DCI therefore serves as the representation-level half of the Phase~2 evaluation, with the downstream diffusion-based recombination analysis testing whether that representational gain translates into better compositional generation.
+
+% DCI is informative for Phase~2, but it does not by itself prove successful recombination. It is a probe-based measure of factor alignment in the learned representation, not a direct measure of out-of-distribution recovery. For that reason, we use DCI only as the first-stage representation analysis and pair it with the downstream held-out recombination evaluation below. If a regime achieves higher DCI yet does not improve withheld orientation--scale recovery, then cleaner latent organisation alone is not sufficient. Conversely, if improvements in DCI and recombination move together across regimes, that provides evidence consistent with H2.
+\paragraph{Held-out recombination accuracy.}
+Held-out recombination accuracy evaluates whether generated images recover withheld orientation--scale combinations under the same downstream evaluation setup used for all Phase~2 regimes. Here, a \emph{withheld combination} means an orientation--scale pair that is deliberately removed from the training set, so that successful generation requires recombining factors in a way not observed during training.
+
+To score the generated samples, we use two \emph{external classifiers}: an image-level orientation classifier and an image-level scale classifier trained separately from the representation-learning model and used only for evaluation. 
+For each generated test image, the orientation classifier predicts \(\hat{y}^{(i)}_{\mathrm{orient}}\) and the scale classifier predicts \(\hat{y}^{(i)}_{\mathrm{scale}}\). These predictions are then compared against the target withheld labels \(y^{(i)}_{\mathrm{orient}}\) and \(y^{(i)}_{\mathrm{scale}}\).
+
+We first report two per-factor accuracies:
+\[
+\mathrm{Acc}_{\mathrm{orient}}
+=
+\frac{1}{N}\sum_{i=1}^{N} r_{\mathrm{orient}}^{(i)},
+\qquad
+\mathrm{Acc}_{\mathrm{scale}}
+=
+\frac{1}{N}\sum_{i=1}^{N} r_{\mathrm{scale}}^{(i)},
+\]
+where
+\[
+r_{\mathrm{orient}}^{(i)}
+=
+\begin{cases}
+1, & \text{if } \hat{y}_{\mathrm{orient}}^{(i)} = y_{\mathrm{orient}}^{(i)},\\[6pt]
+0, & \text{otherwise,}
+\end{cases}
+\qquad
+r_{\mathrm{scale}}^{(i)}
+=
+\begin{cases}
+1, & \text{if } \hat{y}_{\mathrm{scale}}^{(i)} = y_{\mathrm{scale}}^{(i)},\\[6pt]
+0, & \text{otherwise.}
+\end{cases}
+\]
+These scores indicate whether each target factor is recovered individually across the generated test set. For example, if the withheld combination is a particular orientation paired with a particular scale, \(\mathrm{Acc}_{\mathrm{orient}}\) measures how often the generated images receive the correct orientation label, while \(\mathrm{Acc}_{\mathrm{scale}}\) measures how often they receive the correct scale label.
+
+The average of the per-factor accuracies does not measure held-out recombination, because it does not require the correct orientation and correct scale to occur in the same generated sample. We therefore use joint recovery accuracy as the main downstream metric, and report per-factor accuracies only as diagnostic summaries:
+\[
+\mathrm{Rec}_{\mathrm{joint}}
+=
+\frac{1}{N}\sum_{i=1}^{N} r_{\mathrm{joint}}^{(i)},
+\]
+where
+\[
+r_{\mathrm{joint}}^{(i)}
+=
+\begin{cases}
+1, & \text{if } \hat{y}^{(i)}_{\mathrm{orient}} = y^{(i)}_{\mathrm{orient}}
+\text{ and }
+\hat{y}^{(i)}_{\mathrm{scale}} = y^{(i)}_{\mathrm{scale}},\\[6pt]
+0, & \text{otherwise.}
+\end{cases}
+\]
+% This is the strongest Phase~2 metric because H2 concerns recovery of a withheld factor combination, not only recovery of its parts in isolation. A model may achieve reasonably high orientation accuracy and scale accuracy separately, yet still fail to recombine them correctly in the same generated image. \(\mathrm{Rec}_{\mathrm{joint}}\) therefore measures whether the unseen orientation--scale pair is jointly recovered at the sample level.
+
+A simple example clarifies this distinction. Suppose a particular large-scale, left-rotated sprite combination is withheld during training. If a generated image is classified as left-rotated but small, then orientation is correct and scale is incorrect. That sample contributes positively to \(\mathrm{Acc}_{\mathrm{orient}}\), negatively to \(\mathrm{Acc}_{\mathrm{scale}}\), and contributes \(r^{(i)}=0\) to \(\mathrm{Rec}_{\mathrm{joint}}\). Only a generated image for which both classifier predictions match the intended withheld labels counts as a successful recombination.
+
+High per-factor accuracy shows that the generated images preserve the target factors individually. High joint recovery accuracy shows that those factors are recovered together in the same image, which is the central requirement for held-out recombination. Conversely, low joint recovery accuracy, especially when the per-factor scores are higher, indicates partial recovery without successful joint recombination.
+
+This metric has a specific scope. It evaluates whether a regime can generate unseen factor combinations under the shared downstream setup. It does not by itself measure perceptual realism, reconstruction fidelity, or latent disentanglement, and it depends on the reliability of the external classifiers used for scoring. For that reason, held-out recombination accuracy should be interpreted as a targeted downstream test of out-of-distribution factor recovery in the generated samples.
+\subsection{Summary}
+\label{subsec:p2_bridge}
+
+Phase~2 addresses the gap identified in Phase~1 by testing H2 in a controlled synthetic setting. Regime~A provides the control, Regime~B creates the failure setting, Regime~C tests whether disentanglement or weak supervision recover performance, and Regime~D tests whether explicit latent partitioning improves further. If performance falls from Regime~A to Regime~B and then improves most clearly in Regime~D, Phase~2 supports the claim that representation quality is a meaningful limiting factor for composition.
+
+Phase~3 then asks whether the same idea remains useful for chest X-rays, where
+conditional independence is approximate and success must be judged by radiological plausibility.

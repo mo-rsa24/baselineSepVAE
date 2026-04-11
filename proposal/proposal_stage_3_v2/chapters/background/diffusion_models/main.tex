@@ -1,0 +1,560 @@
+% !TEX root = ../../../proposal.tex
+
+\section{Diffusion Models}
+\label{sec:diffusion_models}
+
+Diffusion models \citep{pmlr-v37-sohl-dickstein15} are latent-variable generative models of the form
+\(
+p_\theta(x_0)
+=
+\int p_\theta(x_{0:T})\, \mathrm{d}x_{1:T},
+\)
+where \(x_{1:T}\) are latents of the same dimensionality as the observed data
+\(x_0\). Following \citet{NEURIPS2020_4c5bcfec}, the model consists of a fixed
+\emph{forward diffusion process} that gradually adds noise to data, and a learned
+\emph{reverse process} that aims to invert this corruption.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.65\textwidth]{chapters/background/media/DDPM.png}
+    \caption{Directed graphical model structure of DDPMs \citep{NEURIPS2020_4c5bcfec}.}
+    \label{fig:ddpm_graphical_model}
+\end{figure}
+
+The joint distribution of all variables is written as a Markov chain:
+\begin{equation}
+    p_\theta(x_{0:T})
+    =
+    p(x_T)
+    \prod_{t=1}^{T} p_\theta(x_{t-1}\mid x_t),
+    \qquad
+    p(x_T)=\mathcal{N}(0,I),
+    \label{eq:ddpm_joint}
+\end{equation}
+where \(p_\theta(x_{t-1}\mid x_t)\) is the reverse process. The forward diffusion
+process is defined as a separate Markov chain:
+\begin{equation}
+    q(x_{1:T}\mid x_0)
+    =
+    \prod_{t=1}^T
+    q(x_t\mid x_{t-1}),
+    \qquad
+    q(x_t\mid x_{t-1})
+    =
+    \mathcal{N}\!\left(
+        \sqrt{1-\beta_t}\,x_{t-1},\;
+        \beta_t I
+    \right),
+    \label{eq:ddpm_forward}
+\end{equation}
+where \(\{\beta_t\}_{t=1}^T\) is the variance schedule that \emph{can} be learned by reparameterization,
+or fixed to predetermined constants (e.g., a linear schedule from $10^{-4}$ to $10^{-2}$) such that \(\beta_t\) typically increases slowly with \(t\).
+This ensures that the forward chain remains
+analytically tractable and preserves the same functional form across timesteps while gradually
+driving \(x_T\) toward an isotropic Gaussian.
+
+% \citet{NEURIPS2020_4c5bcfec} choose \(T\) large (e.g.\ \(T=1000\)) and define a monotonically increasing variance schedule \(\{\beta_t\}_{t=1}^T\), typically ranging from approximately \(10^{-4}\) to \(2\times10^{-2}\). 
+% This yields a sequence of small Gaussian perturbations that progressively reduce the signal-to-noise ratio, such that \(x_T\) is approximately distributed as a standard Gaussian \(\mathcal{N}(0, I)\).
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\subparagraph{Forward Diffusion Process.}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+The forward diffusion process is a fixed Markov chain that gradually corrupts a clean sample \(x_0\) by adding Gaussian noise. Following Equation~\ref{eq:ddpm_forward}, each transition has the form
+\begin{equation}
+    q(x_t\mid x_{t-1})
+    =
+    \mathcal{N}\!\left(
+        \sqrt{1-\beta_t}\,x_{t-1},\;
+        \beta_t I
+    \right).
+    \label{eq:ddpm_forward_transition}
+\end{equation}
+Because these transitions are linear Gaussian, the marginal distribution at any timestep is available in closed form:
+\begin{equation}
+    q(x_t\mid x_0)
+    =
+    \mathcal{N}\!\left(
+        \sqrt{\bar\alpha_t}\,x_0,\;
+        (1-\bar\alpha_t)I
+    \right),
+    \quad
+    \text{where} \quad
+    \alpha_t := 1-\beta_t,
+    \qquad
+    \bar\alpha_t := \prod_{s=1}^{t}\alpha_s.
+    \label{eq:ddpm_forward_marginal}
+\end{equation}
+Equivalently, \(x_t\) can be written through the reparameterization
+\begin{equation}
+    x_t
+    =
+    \sqrt{\bar\alpha_t}\,x_0
+    +
+    \sqrt{1-\bar\alpha_t}\,\varepsilon,
+    \qquad
+    \varepsilon \sim \mathcal{N}(0, I).
+    \label{eq:ddpm_forward_reparam}
+\end{equation}
+This makes explicit that the state at timestep \(t\) is a linear combination of the original sample and Gaussian noise. As \(t\) increases, the signal coefficient \(\sqrt{\bar\alpha_t}\) decreases, so the forward process progressively destroys structure and drives \(x_t\) toward an isotropic Gaussian distribution.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\subparagraph{Reverse Denoising Process.}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+The generative task is to invert the forward corruption process. To achieve this, \citet{NEURIPS2020_4c5bcfec} learn a reverse Markov chain whose transitions are Gaussian:
+\begin{equation}
+    p_\theta(x_{t-1}\mid x_t)
+    =
+    \mathcal{N}\!\left(
+        \mu_\theta(x_t,t),\;
+        \Sigma_\theta(x_t,t)
+    \right).
+    \label{eq:ddpm_reverse}
+\end{equation}
+Here, \(\theta\) denotes the parameters of a single neural network shared across timesteps, and the timestep \(t\) is provided to the network through a timestep embedding.
+
+Figure~\ref{fig:variational_diffusion_model} gives an overall picture of the diffusion process, showing that the forward and reverse chains pass through the same sequence of latent states in opposite directions.
+\begin{figure}[ht]
+    \centering
+    \includegraphics[width=0.45\linewidth]{chapters/background/media/variational_diffusion_model.png}
+    \caption{\citet{variational_diffusion_model} illustrate a variational diffusion model in which the lower path represents the forward process that gradually corrupts \(x_0\) into \(x_T\), while the upper path represents the reverse process that denoises step by step. 
+    The intermediate states \(x_1,\dots,x_{T-1}\) are latent variables of the same dimensionality as the data \citep{tutorial_on_diffusion_models}.}
+    \label{fig:variational_diffusion_model}
+\end{figure}
+
+Because the forward process is Gaussian and fixed, it induces an exact conditional distribution over the previous state when both the current noisy state \(x_t\) and the original clean sample \(x_0\) are known:
+\begin{equation}
+    q(x_{t-1}\mid x_t,x_0)
+    =
+    \mathcal{N}\!\left(
+        \tilde{\mu}_t(x_t,x_0),\;
+        \tilde{\beta}_t I
+    \right).
+    \label{eq:true_reverse_posterior}
+\end{equation}
+Its mean and variance are
+\begin{align}
+    \tilde{\mu}_t(x_t,x_0)
+    &=
+    \frac{\sqrt{\bar\alpha_{t-1}}\beta_t}{1-\bar\alpha_t}\,x_0
+    +
+    \frac{\sqrt{\alpha_t}(1-\bar\alpha_{t-1})}{1-\bar\alpha_t}\,x_t,
+    \label{eq:true_reverse_mean}
+    \\
+    \tilde{\beta}_t
+    &=
+    \frac{1-\bar\alpha_{t-1}}{1-\bar\alpha_t}\,\beta_t.
+    \label{eq:true_reverse_var}
+\end{align}
+
+It is important to distinguish the reverse conditional in Equation~\ref{eq:true_reverse_posterior} from the forward transition in Equation~\ref{eq:ddpm_forward_transition}.
+Since the forward process is Markovian,
+\begin{equation}
+    q(x_t\mid x_{t-1},x_0)=q(x_t\mid x_{t-1}),
+    \label{eq:forward_markov}
+\end{equation}
+so the next noisy state depends only on the previous noisy state. 
+In contrast, the exact reverse conditional in Equation~\ref{eq:true_reverse_posterior} depends on both \(x_t\) and \(x_0\). During training, \(x_0\) is known, so this conditional can be computed exactly. At sampling time, however, \(x_0\) is unknown, so the model learns the practical approximation \(p_\theta(x_{t-1}\mid x_t)\) in Equation~\ref{eq:ddpm_reverse}.
+
+Figure~\ref{fig:transition_block} highlights this local asymmetry. The forward transition is fixed and Gaussian, while the reverse transition must be learned.
+
+\begin{figure}[ht]
+    \centering
+    \includegraphics[width=0.60\linewidth]{chapters/background/media/transition_block.png}
+    \caption{Local transition block in a diffusion model. 
+    The blue circles denote neighboring latent states in the diffusion chain: 
+    \(x_{t-1}\) is a less noisy state, \(x_t\) is the current state, and \(x_{t+1}\) is a more noisy state. 
+    The forward process moves from left to right, gradually adding noise, while the reverse process moves from right to left, progressively denoising. 
+    The forward transition \(q(x_t\mid x_{t-1})\) is the fixed Gaussian noising step that maps a cleaner state to a noisier one. 
+    The learned reverse transition \(p_\theta(x_{t-1}\mid x_t)\) maps a noisy state to a less noisy one and is used at sampling time. 
+    The quantity \(p(x_{t-1}\mid x_t)\) denotes the ideal but generally intractable reverse transition, while the exact reverse conditional \(q(x_{t-1}\mid x_t,x_0)\) becomes tractable during training because the original clean sample \(x_0\) is known. 
+    Thus, the forward process uses the fixed Gaussian transition \(q(x_t\mid x_{t-1})\), while the reverse process learns \(p_\theta(x_{t-1}\mid x_t)\). 
+    The exact reverse conditional \(q(x_{t-1}\mid x_t,x_0)\) is available during training because \(x_0\) is known, but not during sampling \citep{tutorial_on_diffusion_models}.}
+    \label{fig:transition_block}
+\end{figure}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\subparagraph{Training Objective.}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+Training seeks to maximize the likelihood of the data under the learned reverse process. 
+Since the latent variables \(x_{1:T}\) cannot be marginalized exactly, training instead optimizes a standard variational lower bound:
+\begin{equation}
+    \mathbb{E}_q[-\log p_\theta(x_0)]
+    \;\le\;
+    \mathcal{L}(\theta)
+    =
+    \mathbb{E}_q\!\left[
+        -\log\frac{p_\theta(x_{0:T})}{q(x_{1:T}\mid x_0)}
+    \right].
+    \label{eq:elbo_ddpm_raw}
+\end{equation}
+This can be rewritten as the familiar decomposition
+\begin{equation}
+    \mathcal{L}(\theta)
+    =
+    \mathbb{E}_q\Big[
+        \underbrace{
+            D_{\mathrm{KL}}\bigl(q(x_T\mid x_0)\,\|\,p(x_T)\bigr)
+        }_{L_T}
+        +
+        \sum_{t=2}^{T}
+        \underbrace{
+            D_{\mathrm{KL}}\bigl(
+                q(x_{t-1}\mid x_t,x_0)
+                \;\|\;
+                p_\theta(x_{t-1}\mid x_t)
+            \bigr)
+        }_{L_{t-1}}
+        -
+        \underbrace{\log p_\theta(x_0\mid x_1)}_{L_0}
+    \Big].
+    \label{eq:elbo_ddpm_kl}
+\end{equation}
+The term \(L_T\) matches the terminal forward distribution to the prior. The intermediate terms \(L_{t-1}\) compare the learned reverse transition in Equation~\ref{eq:ddpm_reverse} with the exact conditional in Equation~\ref{eq:true_reverse_posterior}. The final term \(L_0\) plays the role of a reconstruction term for \(x_0\).
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\subparagraph{Simplified Noise-Prediction Objective.}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+The variational bound in Equation~\ref{eq:elbo_ddpm_kl} decomposes as
+\(
+    L_{\mathrm{VLB}} = L_T + \sum_{t=2}^T L_{t-1} + L_0.
+\)
+The terms \(L_T\) and \(L_0\) do not depend on how the learned reverse mean is parameterized, so the key modeling choice appears in the intermediate terms \(L_{t-1}\).
+
+Since both \(q(x_{t-1}\mid x_t,x_0)\) and \(p_\theta(x_{t-1}\mid x_t)\) are Gaussian, and the reverse-process variance is fixed, each intermediate term reduces to matching the learned mean \(\mu_\theta(x_t,t)\) to the true posterior mean \(\tilde{\mu}_t(x_t,x_0)\):
+\begin{equation}
+    L_{t-1}
+    =
+    \mathbb{E}_q\!\left[
+        \frac{1}{2\sigma_t^2}
+        \bigl\|
+            \tilde{\mu}_t(x_t,x_0)
+            -
+            \mu_\theta(x_t,t)
+        \bigr\|^2
+    \right]
+    + C_t,
+    \label{eq:L_t_mse_form}
+\end{equation}
+where \(C_t\) does not depend on \(\theta\).
+
+Using the forward reparameterization in Equation~\ref{eq:ddpm_forward_reparam}, the true posterior mean in Equation~\ref{eq:true_reverse_mean} can be rewritten as
+\begin{equation}
+    \tilde{\mu}_t(x_t,x_0)
+    =
+    \frac{1}{\sqrt{\alpha_t}}
+    \left(
+        x_t
+        -
+        \frac{1-\alpha_t}{\sqrt{1-\bar{\alpha}_t}}\,
+        \varepsilon
+    \right).
+    \label{eq:true_reverse_mean_eps}
+\end{equation}
+This suggests a convenient parameterization of the learned reverse mean. Instead of predicting \(\mu_\theta(x_t,t)\) directly, the network predicts the noise term \(\varepsilon_\theta(x_t,t)\), and the model mean is then defined by
+\begin{equation}
+    \mu_\theta(x_t,t)
+    =
+    \frac{1}{\sqrt{\alpha_t}}
+    \left(
+        x_t
+        -
+        \frac{1-\alpha_t}{\sqrt{1-\bar{\alpha}_t}}\,
+        \varepsilon_\theta(x_t,t)
+    \right).
+    \label{eq:reverse_mean_eps_param}
+\end{equation}
+Thus, the network is trained to predict noise, while this prediction implicitly determines the learned reverse mean.
+
+Substituting Equations~\ref{eq:true_reverse_mean_eps} and \ref{eq:reverse_mean_eps_param} into Equation~\ref{eq:L_t_mse_form} gives
+\begin{equation}
+    L_{t-1}
+    =
+    \mathbb{E}_{x_0,\varepsilon}
+    \left[
+        \frac{(1-\alpha_t)^2}{2\sigma_t^2\,\alpha_t(1-\bar{\alpha}_t)}
+        \,
+        \bigl\|
+            \varepsilon
+            -
+            \varepsilon_\theta(x_t,t)
+        \bigr\|^2
+    \right]
+    + C_t,
+    \label{eq:weighted_noise_loss}
+\end{equation}
+so each intermediate KL term becomes a weighted mean-squared error between the true noise \(\varepsilon\) and the noise predicted by the network.
+
+Dropping the timestep-dependent weight yields the simplified objective used in practice:
+\begin{equation}
+    L_{\mathrm{simple}}(\theta)
+    =
+    \mathbb{E}_{t,x_0,\varepsilon}
+    \bigl[
+        \|
+            \varepsilon
+            -
+            \varepsilon_\theta(x_t,t)
+        \|^2
+    \bigr],
+    \qquad
+    x_t
+    =
+    \sqrt{\bar{\alpha}_t}\,x_0
+    +
+    \sqrt{1-\bar{\alpha}_t}\,\varepsilon.
+    \label{eq:ddpm_simple_loss}
+\end{equation}
+This is a reweighted form of the ELBO, but is simpler to optimize and is commonly used because it gives stable training and high-quality samples.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\subparagraph{Training and Sampling Algorithms.}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+Training and sampling use the same network in different ways. 
+During training, the model does not execute the full reverse chain. 
+Instead, it draws a clean sample \(x_0\), samples a timestep \(t\) uniformly from \(\{1,\dots,T\}\), samples noise \(\varepsilon\sim\mathcal{N}(0,I)\), and constructs \(x_t\) directly using Equation~\ref{eq:ddpm_forward_reparam}. 
+The network then predicts \(\varepsilon_\theta(x_t,t)\), and a gradient step is taken on the single-timestep loss in Equation~\ref{eq:ddpm_simple_loss}. 
+Thus, the gradient is computed from the loss at the sampled noise level \(t\); training does not backpropagate through the full reverse trajectory.
+
+This still trains one model to handle all timesteps because the same network is shared across the entire noise schedule and receives \(t\) as an input. 
+By sampling different values of \(t\) during training, the model learns to denoise across all noise levels.
+
+The full sequential reverse chain appears only during sampling. 
+Starting from \(x_T\sim\mathcal{N}(0,I)\), the model repeatedly applies the reverse update
+\begin{equation}
+    x_{t-1}
+    =
+    \frac{1}{\sqrt{\alpha_t}}
+    \left(
+        x_t
+        -
+        \frac{\beta_t}{\sqrt{1-\bar\alpha_t}}\,
+        \varepsilon_\theta(x_t,t)
+    \right)
+    +
+    \sigma_t z,
+    \qquad
+    z\sim\mathcal{N}(0,I),
+\end{equation}
+for \(t=T,T-1,\dots,1\), where \(\sigma_t^2\) is fixed by the chosen reverse-process parameterization. 
+This iterative reverse process gradually transforms noise into a structured sample \(x_0\).
+% %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% \subparagraph{Architecture.}
+% %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+% The reverse-process predictor is typically implemented with a U-Net architecture with residual blocks, skip connections, and multi-scale feature hierarchies \citep{NEURIPS2020_4c5bcfec}. The timestep \(t\) is encoded by a sinusoidal positional embedding and injected into intermediate layers so that the network can adapt its prediction to the current noise level. The network outputs \(\varepsilon_\theta(x_t,t)\), which is converted to the reverse mean through Equation~\ref{eq:reverse_mean_eps_param}. In standard DDPM implementations, the reverse variance is fixed and not predicted by the network.
+
+\subsection{Score-Based Formulation}
+
+Song et al.~\citep{song2021scorebased} showed that DDPMs can be understood in continuous time
+through stochastic differential equations. In this view, discrete-time diffusion models and
+score-based generative models are two parameterizations of the same underlying denoising process.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.45\textwidth]{chapters/background/media/score.jpg}
+    \caption{\textbf{Forward and reverse SDEs.} In continuous time, the forward process corrupts
+    data with drift and diffusion terms, while the reverse process uses the score function to
+    steer noisy samples back toward the data manifold \citep{song2021scorebased}.}
+    \label{fig:sde_score_diagram}
+\end{figure}
+
+\paragraph{From the Markov Chain to the Continuous Limit.}
+The discrete forward chain can be interpreted as a discretized version of a continuous corruption process. In continuous time, the variance-preserving formulation is described by
+\begin{equation}
+    \mathrm{d}x
+    =
+    -\tfrac{1}{2}\beta(t)\,x\,\mathrm{d}t
+    +
+    \sqrt{\beta(t)}\,\mathrm{d}W(t),
+\end{equation}
+where $W(t)$ is a Wiener process. More generally, the forward corruption process is written as
+\begin{equation}
+    \mathrm{d}x = f(x,t)\,\mathrm{d}t + g(t)\,\mathrm{d}w,
+\end{equation}
+with drift \(f(x,t)\) and diffusion strength \(g(t)\).
+
+\paragraph{Reverse SDE.}
+The corresponding reverse-time SDE has the form
+\begin{equation}
+    \mathrm{d}x
+    =
+    \left[
+        f(x,t) - g(t)^2 \nabla_x \log p_t(x)
+    \right]\mathrm{d}t
+    +
+    g(t)\,\mathrm{d}\bar w,
+\end{equation}
+where \(\nabla_x \log p_t(x)\) is the \emph{score function}, namely the gradient of the
+log-density at noise level \(t\). Intuitively, the score points in the direction that makes
+the current sample more likely under the time-dependent data distribution. The reverse SDE is
+the continuous-time counterpart of the DDPM reverse chain where reverse denoising is driven by a vector field
+that points back toward the data manifold.
+
+In the DDPM parameterization, the model outputs \(\varepsilon_\theta(x_t,t)\), an estimate
+of the Gaussian noise used to corrupt \(x_0\) into \(x_t\). Because \(x_t\) is a linear
+combination of signal and noise, this noise estimate can be converted directly into a score
+estimate:
+\begin{equation}
+    s_\theta(x_t, t) = -\frac{\varepsilon_\theta(x_t, t)}{\sqrt{1-\bar\alpha_t}}.
+    \label{eq:score_noise}
+\end{equation}
+DDPMs can therefore be viewed as score-based generative models written in a different
+parameterization. 
+% This connection is especially relevant for Phase~1, in Section~\ref{sec:phase_1}, where composition is performed by combining score estimates from pretrained score-based diffusion models during inference.
+
+
+\subsection{Conditional Generation and Classifier-Free Guidance}
+
+This section distinguishes between \textbf{unconditional} and \textbf{conditional} diffusion models by examining their objectives, formulations, and applications.
+
+While the above formulation defines the foundation of \emph{unconditional diffusion models}, practical applications often demand controlled or semantically guided generation such as synthesizing specific classes, attributes, or text-aligned imagery.
+This introduces the need for \emph{conditional diffusion models}, where additional information \(y\) (e.g., labels, text embeddings, or medical attributes) guides the reverse process.
+Recent extensions, such as \emph{classifier} \citep{NEURIPS2021_49ad23d1} and \emph{classifier-free guidance} \citep{ho2022classifier}, further refine this conditioning by explicitly or implicitly modulating the score function to balance fidelity and diversity during sampling.
+
+\paragraph{Unconditional Diffusion Models.}
+An \textit{unconditional diffusion model} learns to generate samples from the marginal data distribution \(p(x)\) without using auxiliary information or labels. During training, the model observes only samples \(x_0\) drawn from \(p_{\text{data}}(x)\) and is optimized to predict the noise added at each diffusion step:
+\begin{equation}
+\mathcal{L}_{\text{uncond}} = \mathbb{E}_{x_0, t, \varepsilon}\!\left[\|\varepsilon - \varepsilon_\theta(x_t, t)\|^2\right].
+\end{equation}
+The training signal is generated from the data itself rather than supplied by external annotation, so the objective is self-supervised. At sampling time, the model starts from Gaussian noise \(x_T \sim \mathcal{N}(0, I)\) and denoises it step by step to produce a realistic sample. In this sense, unconditional diffusion models learn \(p(x)\) directly, without any conditioning variable.
+
+\paragraph{Conditional Diffusion Models.}
+A \textit{conditional diffusion model} extends the unconditional setting by modeling
+\(p(x \mid y)\), where \(y\) provides additional information such as a class label, text
+prompt, or spatial map. The forward noising process is unchanged. Conditioning enters only
+through the reverse model, which is now written as
+\[
+p_\theta(x_{t-1}\mid x_t,y).
+\]
+In the DDPM parameterization, this is implemented by conditioning the noise predictor
+\(\varepsilon_\theta(x_t,t,y)\). Training therefore uses the objective
+\begin{equation}
+\mathcal{L}_{\text{cond}}
+=
+\mathbb{E}_{x_0,t,\varepsilon,y}
+\left[
+\|\varepsilon-\varepsilon_\theta(x_t,t,y)\|^2
+\right].
+\end{equation}
+By Equation~\ref{eq:score_noise}, this is equivalent to learning the conditional score of
+the noisy data distribution. At sampling time, the condition \(y\) steers the denoising
+trajectory toward samples consistent with the desired class, prompt, or attribute. In this
+way, conditional diffusion turns unconditional generation into controllable generation.
+
+\paragraph{Classifier Guidance.}
+Classifier guidance \citep{NEURIPS2021_49ad23d1} provides a post-hoc way to steer an
+unconditional diffusion model toward a target condition \(y\). The key observation is that
+a classifier gives access to \(p_\phi(y\mid x_t)\), and therefore to the gradient
+\[
+\nabla_{x_t}\log p_\phi(y\mid x_t).
+\]
+At timestep \(t\), the goal is to obtain the conditional score of the noisy-state distribution \(p_t(x_t\mid y)\). Using the product rule for the joint distribution,
+\[
+p_t(x_t,y)=p_\phi(y\mid x_t)\,p_t(x_t)=p_t(x_t\mid y)\,p(y).
+\]
+Rearranging the terms yields
+\[
+p_t(x_t\mid y)=\frac{p_\phi(y\mid x_t)\,p_t(x_t)}{p(y)}.
+\]
+Therefore,
+\[
+\log p_t(x_t\mid y)
+=
+\log p_\phi(y\mid x_t)+\log p_t(x_t)-\log p(y),
+\]
+and differentiating with respect to \(x_t\) yields
+\[
+\nabla_{x_t}\log p_t(x_t\mid y)
+=
+\nabla_{x_t}\log p_t(x_t)
++
+\nabla_{x_t}\log p_\phi(y\mid x_t),
+\]
+since \(p(y)\) does not depend on \(x_t\).The conditional score can therefore be written
+as the sum of the unconditional score and a classifier-derived conditioning term. In
+practice, \citet{NEURIPS2021_49ad23d1} scale this conditioning term by a guidance weight
+\(\gamma \ge 0\):
+\begin{equation}
+\tilde{s}(x_t,t,y)
+=
+s_\theta(x_t,t)
++
+\gamma\,\nabla_{x_t}\log p_\phi(y\mid x_t).
+\label{eq:classifier_guidance_scaled}
+\end{equation}
+Larger values of \(\gamma\) strengthen adherence to the target condition, often at the cost
+of reduced sample diversity.
+
+\paragraph{Classifier-Free Guidance.}
+Classifier-free guidance (CFG) \citep{ho2022classifier} achieves a similar effect without
+training a separate classifier. A single diffusion model is trained with condition dropout
+so that it learns both the conditional and unconditional predictors
+\[
+\varepsilon_\theta(x_t,t,y)
+\qquad\text{and}\qquad
+\varepsilon_\theta(x_t,t,\emptyset),
+\]
+where \(\emptyset\) denotes the null condition. At sampling time, these two predictions are
+combined as
+\begin{equation}
+\tilde{\varepsilon}_\theta(x_t,t,y)
+=
+(1+w)\,\varepsilon_\theta(x_t,t,y)
+-
+w\,\varepsilon_\theta(x_t,t,\emptyset),
+\label{eq:guided_eps_cfg}
+\end{equation}
+with guidance weight \(w \ge 0\). When \(w=0\), this reduces to ordinary conditional
+generation. Larger values of \(w\) strengthen the conditional signal while reducing
+diversity. This formulation has become the standard conditioning mechanism in modern
+diffusion models. In the proposed study, it plays two concrete roles. 
+This is relevant throughout the proposal because classifier-free guidance provides the basic conditioning mechanism used for standard prompting and for composition. 
+In Phase~1, it underlies both the single-prompt baseline and the compositional operator of \citet{liu2022compositional}. 
+In Phases~2 and~3, the same conditional prediction framework is used in the controlled synthetic and clinical composition settings.
+
+\paragraph{Stable Diffusion.}
+Stable Diffusion \citep{rombach2022high} is a \emph{latent diffusion model}, meaning that diffusion is performed in a compressed latent space rather than directly in pixel space. 
+An image \(x\) is first mapped by a variational autoencoder into a latent representation \(z\), and the forward and reverse diffusion processes are learned over this lower-dimensional latent variable. T
+his substantially reduces the computational cost of training and sampling while retaining the ability to decode high-resolution images. 
+For text-to-image generation, a text encoder produces prompt embeddings that are injected into the U-Net denoiser through cross-attention \citep{vaswani2017attention}, allowing the denoising trajectory to remain aligned with the prompt semantics. 
+During training, the model learns to predict the noise added to latent variables under text conditioning. 
+During sampling, it starts from Gaussian latent noise, iteratively denoises using the text-conditioned predictor with classifier-free guidance, and then decodes the final latent through the VAE decoder to obtain an image. 
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.60\textwidth]{chapters/background/media/stable diffusion.png}
+    \caption{Stable Diffusion as a latent text-to-image diffusion model. A VAE maps images to a compressed latent space, a text encoder provides prompt embeddings, and a U-Net denoises latent noise under text conditioning before the VAE decoder reconstructs the final image. Operating in latent space reduces computational cost while preserving high-quality generation.}
+    \label{fig:stable_diffusion_architecture}
+\end{figure}
+
+\subsection{Vision-Language Models and Prompt Inversion}
+
+\paragraph{CLIP.}
+CLIP \citep{radford2019language} learns a shared embedding space for images and text using a contrastive objective over paired image-caption data. 
+Its central contribution is to align visual and textual representations so that matching image-text pairs have high similarity while mismatched pairs are pushed apart. 
+This shared space is useful for text-to-image systems because it provides a generic notion of semantic correspondence between prompts and images. 
+In the context of the proposed study, CLIP is relevant as a representation for prompt-image matching and as a building block for inversion methods that map generated images back toward text-aligned embeddings.
+
+\paragraph{BLIP.} BLIP \citep{li2022blip} is a vision-language model for both image understanding and language generation. 
+It combines image and text encoders with multimodal pre-training to support tasks such as captioning, retrieval, and visual question answering. 
+Unlike contrastive models such as CLIP, which mainly return cross-modal similarity scores, BLIP can generate text conditioned on an image. This makes it useful when the evaluation pipeline requires a textual description of generated outputs rather than only an image-text matching score.
+
+BLIP-VQA denotes the use of BLIP-style vision-language models for visual question answering, where the model is conditioned on both an image and a natural-language question and returns a textual answer. 
+In this setting, the model can be asked whether particular entities, attributes, or relations are present in a generated image, making it useful for targeted evaluation of compositional correctness. 
+For the proposed study, BLIP-VQA is relevant as a possible tool for querying whether a generated sample actually contains the intended concepts, rather than relying only on global similarity measures or free-form captions.
+
+\paragraph{Prompt Inversion.}
+In the CLIP \citep{radford2019language} text encoder used by Stable Diffusion \citep{rombach2022high, podell2023sdxl}, the End-of-Sentence (EOS) token has an important role beyond simply marking the end of a prompt. 
+Because CLIP uses a causal attention mask, each token can attend only to the tokens that come before it. 
+As the final token in the sequence, the EOS position is therefore the only one whose hidden state has access to the entire prompt. 
+When CLIP forms a single text representation for image-text alignment, it uses this EOS hidden state rather than averaging all token embeddings. 
+In this sense, the EOS representation acts as a contextualized summary of the whole prompt.
+
+Stable Diffusion Image-to-Prompt Conversion (SD-IPC) \citep{the_clip_model_is_secretly_an_image_to_prompt_converter} builds on this property to convert a reference image into a Stable Diffusion text-conditioning signal with little additional training. 
+The method relies on two observations: first, that Stable Diffusion generation is strongly influenced by this EOS-based text representation; and second, that CLIP training aligns the projected EOS text embedding with the corresponding visual embedding. 
+Using this relationship, the authors derive a closed-form pseudo-inverse of the CLIP text projection matrix to map a CLIP image embedding into the prompt-side conditioning space. 
+This converted embedding is then repeated to form a pseudo-prompt sequence. 
+In the context of this study, SD-IPC is useful because it provides a concrete way to test whether a target image can be recovered from Stable Diffusion's prompt-conditioning space.

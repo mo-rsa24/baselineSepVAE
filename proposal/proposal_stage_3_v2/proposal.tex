@@ -1,0 +1,137 @@
+\documentclass[a4paper,twoside,9pt]{report}
+% ----------------- Packages -----------------
+\usepackage{style/witsa4}
+\usepackage{style/witshead}
+\usepackage{float}                  % Allows 'Here and Only Here' [H] for Floats
+\usepackage{url}                    % \url{} command
+\usepackage{lmodern}                  % Latin Modern — full bold/italic series
+\usepackage[T1]{fontenc}              % T1 encoding for correct bold/special chars
+\usepackage{graphicx}               % \includegraphics
+\usepackage{amsmath}
+\usepackage{algpseudocode} 
+\usepackage{placeins}
+\usepackage[table,xcdraw]{xcolor}
+\usepackage{pgfgantt}
+\usepackage{caption}
+\usepackage{amssymb}
+\usepackage{amsthm}
+\usepackage{tikz}
+\usepackage{bm,nicefrac}
+\usepackage{amssymb}
+\usepackage{tabularx} % For creating tables that span the width of the page
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{amsmath}
+\usepackage{mathtools}
+\usepackage{booktabs}
+\usepackage{parskip}
+\usepackage[all]{nowidow}
+\usepackage{adjustbox}
+\usepackage{array}
+\usepackage{booktabs}  
+\usepackage{varioref} % Hyperlinks references
+\usepackage[bookmarks=true,bookmarksopen=true]{hyperref} 
+\usepackage{cleveref} 
+\usepackage{natbib} \input{natbib-add}
+\usepackage{subcaption}
+\bibliographystyle{named-wits}
+\bibpunct{[}{]}{;}{a}{}{}  % to get correct punctuation for bibliography
+\setlength{\skip\footins}{1.5cm}
+\newcommand{\citets}[1]{\citeauthor{#1}'s \citeyearpar{#1}}
+\renewcommand\bibname{References}  
+\renewcommand{\topfraction}{.85}
+\renewcommand{\bottomfraction}{.7}
+\renewcommand{\textfraction}{.15}
+\renewcommand{\floatpagefraction}{.66}
+
+\pagestyle{headings}
+
+\pagestyle{plain}
+\pagenumbering{roman}
+
+\renewenvironment{abstract}{\ \vfill\begin{center}\textbf{Abstract}\end{center}}{\vfill\vfill\newpage}
+\newenvironment{declaration}{\ \vfill\begin{center}\textbf{Declaration}\end{center}}{\vfill\vfill\newpage}
+\newenvironment{ethics}{\ \vfill\begin{center}\textbf{Ethical Use Of AI}\end{center}}{\vfill\vfill\newpage}
+\newenvironment{acknowledgements}{\ \vfill\begin{center}\textbf{Acknowledgements}\end{center}}{\vfill\vfill\newpage}
+
+\begin{document}
+\onecolumn
+\thispagestyle{empty}
+
+\setcounter{page}{0}
+\ 
+\begin{center}
+  \vfill
+  {
+  \huge \bf \textsc{A Study on the Composability Gap in Diffusion Models for Clinical Out-of-Distribution Generation}\\
+
+  \vspace{2em}
+  \large School of Computer Science \& Applied Mathematics\\
+  \large University of the Witwatersrand\\[20pt]
+  \normalsize
+  Molefe Molefe \\
+  1858893 \\[20pt]
+  Supervised by Dr. Devon Jarvis and Prof. Richard Klein  \\[10pt]
+  April 10, 2026
+  }
+
+  \vfill
+  \vfill
+  \includegraphics[width=3.8cm]{images/wits}
+  \vspace{16pt}\\
+  \small{A proposal submitted to the Faculty of Science, University of the Witwatersrand,
+Johannesburg, in partial fulfilment of the requirements for the degree of Doctor of Philosophy.}\\
+\end{center}
+\vfill
+\newpage
+
+\pagestyle{plain}
+\setcounter{page}{1}
+
+\phantomsection
+\include{chapters/abstract/abstract}
+
+\phantomsection
+\include{chapters/declaration/declaration}
+
+\phantomsection
+\tableofcontents
+\newpage
+\pagenumbering{arabic}
+
+\include{chapters/introduction/introduction}
+
+\include{chapters/background/background}
+
+\include{chapters/related_works/related_works}
+
+\include{chapters/research_objectives/main}
+
+\include{chapters/research_method/main}
+
+\include{chapters/research_plan/research_plan}
+
+\include{chapters/conclusion/conclusion}
+
+\bibliography{references/generative_modeling/generative_models,
+references/generative_modeling/diffusion,
+references/datasets,
+references/generative_modeling/autoregressive_models,
+references/generative_modeling/gans,
+references/generative_modeling/survey,
+references/generative_modeling/attention,
+references/generative_modeling/compositional_diffusion,
+references/generative_modeling/large_models/vlms,
+references/statistics/statistical_physics,
+references/blogs,
+references/medical_imaging/survey,
+references/medical_imaging/datasets,
+references/medical_imaging/dgm,
+references/medical_imaging/diffusion_models,
+references/medical_imaging/silico_tb,
+references/medical_imaging/image_reconstruction,
+references/medical_imaging/image_to_image_translation,
+references/medicine/radiology
+}
+\addcontentsline{toc}{chapter}{References}
+\end{document}
