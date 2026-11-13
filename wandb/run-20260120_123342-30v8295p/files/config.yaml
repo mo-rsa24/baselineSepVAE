@@ -1,0 +1,221 @@
+_wandb:
+    value:
+        cli_version: 0.24.0
+        e:
+            zz81wsh518ra9tohbhi9rwj3w67h4ghi:
+                args:
+                    - --data_root
+                    - /workspace/datasets/cleaned
+                    - --task
+                    - TB
+                    - --split
+                    - train
+                    - --class_filter
+                    - "1"
+                    - --img_size
+                    - "256"
+                    - --ae_ckpt_path
+                    - /workspace/superdiff-ldm/runs/unified-ae-proto-increase-ae-autoencoder-eb7c6d6-20260112-063726/20260112-063740/ckpts/last.flax
+                    - --ae_config_path
+                    - /workspace/superdiff-ldm/runs/unified-ae-proto-increase-ae-autoencoder-eb7c6d6-20260112-063726/20260112-063740/run_meta.json
+                    - --preencoded_latents_dir
+                    - /workspace/superdiff-ldm/preencode_latents/vae
+                    - --ldm_ch_mults
+                    - 1,2,4,4
+                    - --ldm_num_res_blocks
+                    - "3"
+                    - --lr
+                    - "1e-4"
+                    - --weight_decay
+                    - "1e-4"
+                    - --grad_clip
+                    - "1.0"
+                    - --epochs
+                    - "1500"
+                    - --batch_per_device
+                    - "128"
+                    - --log_every
+                    - "100"
+                    - --sample_every
+                    - "300"
+                    - --sample_batch_size
+                    - "8"
+                    - --output_root
+                    - runs_ldm
+                    - --exp_name
+                    - cxr_ldm
+                    - --run_name
+                    - ldm-tb-composition-preencode-latents-ancestral-8b4bb7d-20260120-123239
+                    - --use_ema
+                    - --wandb
+                    - --wandb_project
+                    - cxr-ldm-composition-test
+                    - --wandb_entity
+                    - ""
+                    - --wandb_tags
+                    - ldm,256,a100,tb
+                    - --wandb_group
+                    - ldm-tb
+                    - --wandb_name
+                    - ldm-tb-composition-preencode-latents-ancestral-8b4bb7d-20260120-123239
+                    - --git_hash
+                    - 8b4bb7d
+                    - --git_branch
+                    - composition-preencode-latents-ancestral
+                    - --git_parent
+                    - c31ab2a
+                codePath: run/ldm.py
+                codePathLocal: run/ldm.py
+                cpu_count: 252
+                cpu_count_logical: 252
+                cudaVersion: "12.8"
+                disk:
+                    /:
+                        total: "21474836480"
+                        used: "14071386112"
+                email: 1858893@students.wits.ac.za
+                executable: /root/micromamba/envs/ldm/bin/python
+                git:
+                    commit: 8b4bb7d9d158dbb5bd8bb0b678bc9645fe340a2a
+                    remote: https://github.com/mo-rsa24/superdiff-ldm.git
+                gpu: NVIDIA A100 80GB PCIe
+                gpu_count: 1
+                gpu_nvidia:
+                    - architecture: Ampere
+                      cudaCores: 6912
+                      memoryTotal: "85899345920"
+                      name: NVIDIA A100 80GB PCIe
+                      uuid: GPU-28ecafd1-6148-062c-9874-dbdbe9207a0a
+                host: e8faa8027d38
+                memory:
+                    total: "1014468976640"
+                os: Linux-6.14.0-24-generic-x86_64-with-glibc2.35
+                program: /workspace/superdiff-ldm/run/ldm.py
+                python: CPython 3.11.14
+                root: /workspace/superdiff-ldm
+                startedAt: "2026-01-20T12:33:42.760215Z"
+                writerId: zz81wsh518ra9tohbhi9rwj3w67h4ghi
+        m: []
+        python_version: 3.11.14
+        t:
+            "1":
+                - 1
+                - 2
+                - 3
+                - 5
+                - 12
+                - 41
+                - 45
+                - 49
+                - 51
+                - 53
+            "2":
+                - 1
+                - 2
+                - 3
+                - 5
+                - 12
+                - 41
+                - 45
+                - 49
+                - 51
+                - 53
+            "3":
+                - 2
+                - 13
+                - 15
+                - 16
+            "4": 3.11.14
+            "5": 0.24.0
+            "12": 0.24.0
+            "13": linux-x86_64
+ae_ckpt_path:
+    value: /workspace/superdiff-ldm/runs/unified-ae-proto-increase-ae-autoencoder-eb7c6d6-20260112-063726/20260112-063740/ckpts/last.flax
+ae_config_path:
+    value: /workspace/superdiff-ldm/runs/unified-ae-proto-increase-ae-autoencoder-eb7c6d6-20260112-063726/20260112-063740/run_meta.json
+batch_per_device:
+    value: 128
+class_filter:
+    value: 1
+data_root:
+    value: /workspace/datasets/cleaned
+ema_decay:
+    value: 0.999
+epochs:
+    value: 1500
+exp_name:
+    value: cxr_ldm
+git_branch:
+    value: composition-preencode-latents-ancestral
+git_hash:
+    value: 8b4bb7d
+git_parent:
+    value: c31ab2a
+grad_clip:
+    value: 1
+img_size:
+    value: 256
+latent_scale_factor:
+    value: 1
+ldm_attn_res:
+    value: "16"
+ldm_base_ch:
+    value: 128
+ldm_ch_mults:
+    value: 1,2,4,4
+ldm_num_res_blocks:
+    value: 3
+ldm_z_channels:
+    value: 4
+log_every:
+    value: 100
+lr:
+    value: 0.0001
+output_root:
+    value: runs_ldm
+overfit_k:
+    value: 0
+overfit_one:
+    value: false
+preencoded_latents_dir:
+    value: /workspace/superdiff-ldm/preencode_latents/vae
+preencoded_manifest:
+    value: manifest.jsonl
+repeat_len:
+    value: 500
+resume_dir:
+    value: null
+run_name:
+    value: ldm-tb-composition-preencode-latents-ancestral-8b4bb7d-20260120-123239
+sample_batch_size:
+    value: 8
+sample_every:
+    value: 300
+seed:
+    value: 42
+split:
+    value: train
+task:
+    value: TB
+use_bfloat16:
+    value: false
+use_ema:
+    value: true
+use_remat:
+    value: false
+vae_z_channels:
+    value: 4
+wandb:
+    value: true
+wandb_entity:
+    value: ""
+wandb_group:
+    value: ldm-tb
+wandb_name:
+    value: ldm-tb-composition-preencode-latents-ancestral-8b4bb7d-20260120-123239
+wandb_project:
+    value: cxr-ldm-composition-test
+wandb_tags:
+    value: ldm,256,a100,tb
+weight_decay:
+    value: 0.0001

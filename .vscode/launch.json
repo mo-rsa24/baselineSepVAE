@@ -1,0 +1,336 @@
+{
+    // VS Code launch configuration for running CIFAR RQ1 evaluation on the cluster
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "LDM Overfit",
+            "type": "python",
+            "request": "launch",
+            "program": "/home-mscluster/mmolefe/Playground/PhD/superdiff-ldm/run/ldm.py",
+            "args": [
+               "--data_root",
+               "/home-mscluster/mmolefe/Playground/PhD/datasets/cleaned",
+               "--task",
+               "TB",
+               "--split",
+               "train",
+               "--img_size",
+               "256",
+               "--class_filter",
+               "0",
+               "--ae_ckpt_path",
+               "/home-mscluster/mmolefe/cluster_staging/unified-ae-proto-eb7c6d6_20260112-063726/runs/unified-ae-proto-increase-ae-autoencoder-eb7c6d6-20260112-063726/20260112-063740/ckpts/last.flax",
+               "--ae_config_path",
+               "/home-mscluster/mmolefe/cluster_staging/unified-ae-proto-eb7c6d6_20260112-063726/runs/unified-ae-proto-increase-ae-autoencoder-eb7c6d6-20260112-063726/20260112-063740/run_meta.json",
+               "--latent_scale_factor",
+               "0.999373",
+               "--ldm_base_ch",
+               "64",
+               "--ldm_ch_mults",
+               "1,2",
+               "--ldm_num_res_blocks",
+               "1",
+               "--ldm_attn_res",
+               "8",
+               "--lr",
+               "1e-4",
+               "--weight_decay",
+               "1e-4",
+               "--grad_clip",
+               "1.0",
+               "--epochs",
+               "20",
+               "--batch_per_device",
+               "8",
+               "--seed",
+               "42",
+               "--sample_every",
+               "1",
+               "--log_every",
+               "1",
+               "--output_root",
+               "runs_ldm_debug",
+               "--exp_name",
+               "local_smoke_test",
+            ],
+            "env": {
+                // Ensure project root is on PYTHONPATH so imports like `from cifar...` work
+                "PYTHONPATH": "/home-mscluster/mmolefe/Playground/PhD/superdiff-ldm"
+            },
+            "console": "integratedTerminal",
+            "cwd": "/home-mscluster/mmolefe/Playground/PhD/superdiff-ldm"
+        },
+        {
+            "name": "Autoencoder",
+            "type": "python",
+            "request": "launch",
+            "program": "/home-mscluster/mmolefe/Playground/PhD/superdiff-ldm/run/autoencoder.py",
+            "args": [
+               "--data_root",
+               "/home-mscluster/mmolefe/Playground/PhD/datasets/cleaned",
+               "--task",
+               "All_CXR",
+               "--split",
+               "train",
+               "--img_size",
+               "256",
+               "--batch_per_device",
+               "4"
+            ],
+            "env": {
+                // Ensure project root is on PYTHONPATH so imports like `from cifar...` work
+                "PYTHONPATH": "/home-mscluster/mmolefe/Playground/PhD/superdiff-ldm"
+            },
+            "console": "integratedTerminal",
+            "cwd": "/home-mscluster/mmolefe/Playground/PhD/superdiff-ldm"
+        },{
+            "name": "Stable Diffusion LDM",
+            "type": "python",
+            "request": "launch",
+            "program": "/home-mscluster/mmolefe/Playground/PhD/superdiff-ldm/run/ldm_sd_vae.py",
+            "args": [
+               "--data_root",
+               "/home-mscluster/mmolefe/Playground/PhD/datasets/cleaned",
+               "--task",
+               "TB",
+               "--sd_vae_id",
+               "stabilityai/sd-vae-ft-mse",
+               "--latent_scale_factor",
+               "0.18215"
+            ],
+            "env": {
+                // Ensure project root is on PYTHONPATH so imports like `from cifar...` work
+                "PYTHONPATH": "/home-mscluster/mmolefe/Playground/PhD/superdiff-ldm"
+            },
+            "console": "integratedTerminal",
+            "cwd": "/home-mscluster/mmolefe/Playground/PhD/superdiff-ldm"
+        }
+        ,
+        {
+            "name": "Sample Normal Only",
+            "type": "python",
+            "request": "launch",
+            "program": "/home-mscluster/mmolefe/Playground/PhD/superdiff-ldm/sample_only.py",
+            "args": [
+               "--run_dir",
+               "final_run/ldm-normal-composition-preencode-latents-ancestral-8b4bb7d-20260120-111058",
+               "--output_name",
+               "normal.png",
+               "--batch_size",
+               "16",
+            ],
+            "env": {
+                // Ensure project root is on PYTHONPATH so imports like `from cifar...` work
+                "PYTHONPATH": "/home-mscluster/mmolefe/Playground/PhD/superdiff-ldm"
+            },
+            "console": "integratedTerminal",
+            "cwd": "/home-mscluster/mmolefe/Playground/PhD/superdiff-ldm"
+        } ,
+        {
+            "name": "Sample TB Only",
+            "type": "python",
+            "request": "launch",
+            "program": "/home-mscluster/mmolefe/Playground/PhD/superdiff-ldm/sample_only.py",
+            "args": [
+               "--run_dir",
+               "final_run/ldm-tb-composition-preencode-latents-ancestral-8b4bb7d-20260120-123239",
+               "--output_name",
+               "tb.png",
+               "--batch_size",
+               "16",
+            ],
+            "env": {
+                // Ensure project root is on PYTHONPATH so imports like `from cifar...` work
+                "PYTHONPATH": "/home-mscluster/mmolefe/Playground/PhD/superdiff-ldm"
+            },
+            "console": "integratedTerminal",
+            "cwd": "/home-mscluster/mmolefe/Playground/PhD/superdiff-ldm"
+        },
+
+        // ====================================================================
+        // SEPVAE SPATIAL LATENTS: TRAINING
+        // ====================================================================
+        {
+            "name": "SepVAE: Quick Debug (1 epoch, 64×64×8 latents)",
+            "type": "python",
+            "request": "launch",
+            "module": "run.train_sep_vae",
+            "args": [
+                "--epochs", "1",
+                "--batch_size", "4",
+                "--num_workers", "4",
+                "--log_every", "10",
+                "--save_every", "1",
+                "--z_channels_common", "4",
+                "--z_channels_disease", "2",
+                "--lr_vae", "1e-4",
+                "--lr_disc", "1e-4",
+                "--weight_rec", "1.0",
+                "--weight_kl_common", "1e-4",
+                "--weight_kl_disease", "1e-4",
+                "--weight_null", "1e-3",
+                "--weight_mi", "1e-3",
+                "--exp_name", "debug_spatial",
+                "--output_root", "runs_sepvae_debug", 
+                "--verbose_backbone", "--verbose_n_samples", "6"
+            ],
+            "env": {
+                "PYTHONPATH": "/home-mscluster/mmolefe/Playground/PhD/superdiff-ldm",
+                "CUDA_VISIBLE_DEVICES": "0"
+            },
+            "console": "integratedTerminal",
+            "cwd": "/home-mscluster/mmolefe/Playground/PhD/superdiff-ldm"
+        },
+        {
+            "name": "SepVAE: Full Training (100 epochs)",
+            "type": "python",
+            "request": "launch",
+            "module": "run.train_sep_vae",
+            "args": [
+                "--epochs", "100",
+                "--batch_size", "8",
+                "--num_workers", "8",
+                "--log_every", "100",
+                "--save_every", "5",
+                "--z_channels_common", "4",
+                "--z_channels_disease", "2",
+                "--lr_vae", "1e-4",
+                "--lr_disc", "1e-4",
+                "--exp_name", "sepvae_spatial_full",
+                "--output_root", "runs_sepvae"
+            ],
+            "env": {
+                "PYTHONPATH": "/home-mscluster/mmolefe/Playground/PhD/superdiff-ldm",
+                "CUDA_VISIBLE_DEVICES": "0"
+            },
+            "console": "integratedTerminal",
+            "cwd": "/home-mscluster/mmolefe/Playground/PhD/superdiff-ldm"
+        },
+        {
+            "name": "SepVAE: Training with W&B Logging",
+            "type": "python",
+            "request": "launch",
+            "module": "run.train_sep_vae",
+            "args": [
+                "--wandb",
+                "--wandb_project", "sepvae-chess-spatial",
+                "--epochs", "100",
+                "--batch_size", "8",
+                "--exp_name", "sepvae_spatial_wandb"
+            ],
+            "env": {
+                "PYTHONPATH": "/home-mscluster/mmolefe/Playground/PhD/superdiff-ldm",
+                "CUDA_VISIBLE_DEVICES": "0"
+            },
+            "console": "integratedTerminal",
+            "cwd": "/home-mscluster/mmolefe/Playground/PhD/superdiff-ldm"
+        },
+        {
+            "name": "SepVAE: High Nulling Weight (Stronger Separation)",
+            "type": "python",
+            "request": "launch",
+            "module": "run.train_sep_vae",
+            "args": [
+                "--epochs", "50",
+                "--batch_size", "8",
+                "--weight_null", "1e-2",
+                "--exp_name", "sepvae_high_null"
+            ],
+            "env": {
+                "PYTHONPATH": "/home-mscluster/mmolefe/Playground/PhD/superdiff-ldm",
+                "CUDA_VISIBLE_DEVICES": "0"
+            },
+            "console": "integratedTerminal",
+            "cwd": "/home-mscluster/mmolefe/Playground/PhD/superdiff-ldm"
+        },
+
+        // ====================================================================
+        // SEPVAE: ANALYSIS - LINEAR PROBING
+        // ====================================================================
+        {
+            "name": "Analysis: Linear Probe SepVAE",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/notebooks/linear_probe_sepvae.py",
+            "args": [],
+            "env": {
+                "PYTHONPATH": "/home-mscluster/mmolefe/Playground/PhD/superdiff-ldm",
+                "CUDA_VISIBLE_DEVICES": "0"
+            },
+            "console": "integratedTerminal",
+            "cwd": "/home-mscluster/mmolefe/Playground/PhD/superdiff-ldm"
+        },
+
+        // ====================================================================
+        // SEPVAE: ANALYSIS - VISUALIZATIONS
+        // ====================================================================
+        {
+            "name": "Analysis: GradCAM Visualization",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/notebooks/gradcam_visualization.py",
+            "args": [],
+            "env": {
+                "PYTHONPATH": "/home-mscluster/mmolefe/Playground/PhD/superdiff-ldm",
+                "CUDA_VISIBLE_DEVICES": "0"
+            },
+            "console": "integratedTerminal",
+            "cwd": "/home-mscluster/mmolefe/Playground/PhD/superdiff-ldm"
+        },
+        {
+            "name": "Analysis: Manifold (t-SNE)",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/notebooks/manifold_tsne.py",
+            "args": [],
+            "env": {
+                "PYTHONPATH": "/home-mscluster/mmolefe/Playground/PhD/superdiff-ldm",
+                "CUDA_VISIBLE_DEVICES": "0"
+            },
+            "console": "integratedTerminal",
+            "cwd": "/home-mscluster/mmolefe/Playground/PhD/superdiff-ldm"
+        },
+        {
+            "name": "Analysis: Full Analysis Report",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/notebooks/full_sepvae_analysis.py",
+            "args": [],
+            "env": {
+                "PYTHONPATH": "/home-mscluster/mmolefe/Playground/PhD/superdiff-ldm",
+                "CUDA_VISIBLE_DEVICES": "0"
+            },
+            "console": "integratedTerminal",
+            "cwd": "/home-mscluster/mmolefe/Playground/PhD/superdiff-ldm"
+        },
+
+        // ====================================================================
+        // SEPVAE: TESTING
+        // ====================================================================
+        {
+            "name": "Test: SepVAE Spatial Latents",
+            "type": "python",
+            "request": "launch",
+            "module": "models.sep_vae_jax",
+            "args": [],
+            "env": {
+                "PYTHONPATH": "/home-mscluster/mmolefe/Playground/PhD/superdiff-ldm",
+                "CUDA_VISIBLE_DEVICES": "0"
+            },
+            "console": "integratedTerminal",
+            "cwd": "/home-mscluster/mmolefe/Playground/PhD/superdiff-ldm"
+        },
+        {
+            "name": "Test: VinBigData Dataset + JAX Collation",
+            "type": "python",
+            "request": "launch",
+            "module": "datasets.VinBigData",
+            "args": [],
+            "env": {
+                "PYTHONPATH": "/home-mscluster/mmolefe/Playground/PhD/superdiff-ldm"
+            },
+            "console": "integratedTerminal",
+            "cwd": "/home-mscluster/mmolefe/Playground/PhD/superdiff-ldm"
+        }
+    ]
+}

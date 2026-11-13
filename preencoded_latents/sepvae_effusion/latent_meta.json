@@ -1,0 +1,30 @@
+{
+  "sepvae_ckpt": "runs_sepvae/sepvae_independence_driven-20260220-085943/checkpoints/checkpoint_final.pkl",
+  "disease": "effusion",
+  "dicom_dir": "/datasets/mmolefe/vinbigdata/train",
+  "csv_path": "/datasets/mmolefe/vinbigdata/train.csv",
+  "img_size": 512,
+  "exclude_cross_disease_overlap": false,
+  "use_mean": false,
+  "seed": 42,
+  "num_samples": 1032,
+  "latent_shape": [
+    64,
+    64,
+    2
+  ],
+  "latent_scale_factor": 8.121787484284269,
+  "latent_stats_before_scaling": {
+    "mean": 0.004891490563750267,
+    "std": 0.1231256052851677,
+    "min": -1.3286224603652954,
+    "max": 1.2668308019638062
+  },
+  "sepvae_args": {
+    "z_channels_common": 4,
+    "z_channels_disease": 2,
+    "use_fpn": false
+  },
+  "manifest_name": "manifest.jsonl",
+  "latents_dir": "latents"
+}

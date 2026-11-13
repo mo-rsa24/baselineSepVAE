@@ -1,0 +1,19 @@
+Repo root: /var/lib/slurm/slurmd
+========================================
+SLURM job  : 185244
+Node       : mscluster109
+GPU        : NVIDIA RTX A6000
+NVIDIA RTX A6000
+Launcher   : /home-mscluster/mmolefe/Playground/PhD/miniSepVAE/launchers/single_runs/mini_vae/exp_C_contrastive_margin.sh
+Start time : Sun Mar 15 05:49:25 AM SAST 2026
+========================================
+[VinBigData] Loaded 13240 valid IDs from cache (valid_ids_cache.json).
+[VinBigData Dataset Initialized]
+  Normal: 10606 images
+  Cardiomegaly: 1950 images (2300 with bbox)
+  Pleural Effusion: 684 images (1032 with bbox)
+  Cross-disease overlap filtering: enabled
+    Removed from Cardiomegaly pool: 350
+    Removed from Effusion pool: 348
+  Total triplets: 684
+MiniSepVAE params: 2,244,401

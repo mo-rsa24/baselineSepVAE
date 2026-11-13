@@ -1,0 +1,13 @@
+program: run/ldm.py
+method: grid
+metric:
+  name: sample_diversity/metrics/pairwise_mse_mean
+  goal: maximize
+parameters:
+  task:
+    value: "PNEUMONIA"
+  z_channels:
+    values: [1, 2, 3, 4, 5]
+  # Base directory where VAE runs are stored
+  vae_runs_root:
+    value: "runs"

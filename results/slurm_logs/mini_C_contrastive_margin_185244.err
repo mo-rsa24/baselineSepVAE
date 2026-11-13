@@ -1,0 +1,13 @@
+E0315 05:49:57.829195 2303750 hlo_lexer.cc:443] Failed to parse int literal: 19661042864605151615
+/home-mscluster/mmolefe/miniforge3/envs/jaxstack/lib/python3.11/multiprocessing/popen_fork.py:66: RuntimeWarning: os.fork() was called. os.fork() is incompatible with multithreaded code, and JAX is multithreaded, so this will likely lead to a deadlock.
+  self.pid = os.fork()
+Traceback (most recent call last):
+  File "/home-mscluster/mmolefe/Playground/PhD/miniSepVAE/run/train_mini_sepvae.py", line 645, in <module>
+    main()
+  File "/home-mscluster/mmolefe/Playground/PhD/miniSepVAE/run/train_mini_sepvae.py", line 533, in main
+    lc, lcard, leff, lab = _collect_latents_from_triplet_loader(
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home-mscluster/mmolefe/Playground/PhD/miniSepVAE/run/train_sep_vae.py", line 1085, in _collect_latents_from_triplet_loader
+    x = jnp.array(batch_torch[img_key].permute(0, 2, 3, 1).numpy())
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'numpy.ndarray' object has no attribute 'permute'

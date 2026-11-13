@@ -1,0 +1,1 @@
+{"train/step":375,"samples":{"height":1034,"_type":"image-file","sha256":"cc135ab5a714a2f53038c41107d8b5a2d3d1d7a94f76b0c314bd2deddc4e02dc","size":769576,"path":"media/images/samples_35_cc135ab5a714a2f53038.png","format":"png","width":1034},"epoch":100,"_wandb":{"runtime":13361},"_runtime":13361,"_timestamp":1.7597860141032472e+09,"_step":35,"train/loss":0.7884251475334167}

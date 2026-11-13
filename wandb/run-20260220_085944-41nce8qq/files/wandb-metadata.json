@@ -1,0 +1,92 @@
+{
+  "os": "Linux-5.15.0-43-generic-x86_64-with-glibc2.35",
+  "python": "3.11.14",
+  "startedAt": "2026-02-20T06:59:44.191926Z",
+  "args": [
+    "--exp_name",
+    "sepvae_independence_driven",
+    "--batch_size",
+    "10",
+    "--gradient_checkpointing",
+    "--half_precision",
+    "bf16",
+    "--upsample_method",
+    "bilinear",
+    "--exclude_cross_disease_overlap",
+    "--sigma_inactive",
+    "0.1",
+    "--weight_null",
+    "1e-2",
+    "--weight_orthogonality",
+    "0.1",
+    "--weight_mi",
+    "1e-2",
+    "--weight_kl_common",
+    "1e-4",
+    "--weight_kl_disease",
+    "1e-4",
+    "--free_bits",
+    "2.0",
+    "--kl_warmup_epochs",
+    "10",
+    "--weight_perceptual",
+    "0.05",
+    "--weight_adversarial",
+    "0.0",
+    "--manifold_method",
+    "pca",
+    "--sample_every",
+    "5",
+    "--manifold_every",
+    "5",
+    "--disent_metrics_every",
+    "5",
+    "--epochs",
+    "100",
+    "--wandb",
+    "--wandb_project",
+    "sepvae-disentangle"
+  ],
+  "program": "-m run.train_sep_vae",
+  "git": {
+    "remote": "git@github.com:mo-rsa24/superdiff-ldm.git",
+    "commit": "7f7d8b6ae0796cd0263848a5faf2d88e82710297"
+  },
+  "email": "1858893@students.wits.ac.za",
+  "root": "/home-mscluster/mmolefe/Playground/PhD/superdiff-ldm",
+  "host": "mscluster106.ms.wits.ac.za",
+  "username": "mmolefe",
+  "executable": "/home-mscluster/mmolefe/miniforge3/envs/jaxstack/bin/python",
+  "cpu_count": 56,
+  "cpu_count_logical": 112,
+  "gpu": "[Quadro RTX 8000, Quadro RTX 8000]",
+  "gpu_count": 2,
+  "disk": {
+    "/": {
+      "total": "501809635328",
+      "used": "168655007744"
+    }
+  },
+  "memory": {
+    "total": "1080768438272"
+  },
+  "cpu": {
+    "count": 56,
+    "countLogical": 112
+  },
+  "gpu_nvidia": [
+    {
+      "name": "Quadro RTX 8000",
+      "memoryTotal": "51539607552",
+      "cudaCores": 4608,
+      "architecture": "Turing"
+    },
+    {
+      "name": "Quadro RTX 8000",
+      "memoryTotal": "51539607552",
+      "cudaCores": 4608,
+      "architecture": "Turing"
+    }
+  ],
+  "cudaVersion": "12.7"
+}

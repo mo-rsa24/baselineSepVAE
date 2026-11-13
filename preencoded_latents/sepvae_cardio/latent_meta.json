@@ -1,0 +1,30 @@
+{
+  "sepvae_ckpt": "runs_sepvae/sepvae_independence_driven-20260220-085943/checkpoints/checkpoint_final.pkl",
+  "disease": "cardiomegaly",
+  "dicom_dir": "/datasets/mmolefe/vinbigdata/train",
+  "csv_path": "/datasets/mmolefe/vinbigdata/train.csv",
+  "img_size": 512,
+  "exclude_cross_disease_overlap": false,
+  "use_mean": false,
+  "seed": 42,
+  "num_samples": 2300,
+  "latent_shape": [
+    64,
+    64,
+    2
+  ],
+  "latent_scale_factor": 7.716621453927621,
+  "latent_stats_before_scaling": {
+    "mean": 0.012685208581387997,
+    "std": 0.12959039211273193,
+    "min": -1.6043510437011719,
+    "max": 1.521450161933899
+  },
+  "sepvae_args": {
+    "z_channels_common": 4,
+    "z_channels_disease": 2,
+    "use_fpn": false
+  },
+  "manifest_name": "manifest.jsonl",
+  "latents_dir": "latents"
+}

@@ -1,0 +1,14 @@
+{
+  "data_root": "/home-mscluster/mmolefe/Playground/PhD/datasets/cleaned",
+  "task": "TB",
+  "split": "train",
+  "img_size": 256,
+  "class_filter": null,
+  "ae_ckpt_path": "/home-mscluster/mmolefe/cluster_staging/unified-ae-proto-1f2a36b_20260110-013819/runs/unified-ae-proto-increase-ae-autoencoder-1f2a36b-20260110-013819/20260110-013836/ckpts/last.flax",
+  "ae_config_path": "/home-mscluster/mmolefe/cluster_staging/unified-ae-proto-1f2a36b_20260110-013819/runs/unified-ae-proto-increase-ae-autoencoder-1f2a36b-20260110-013819/20260110-013836/run_meta.json",
+  "latent_scale_factor": 0.99999905,
+  "num_samples": 2259,
+  "manifest_name": "manifest.jsonl",
+  "latents_dir": "latents",
+  "seed": 42
+}

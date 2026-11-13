@@ -1,0 +1,28 @@
+wandb_version: 1
+
+ae_ckpt_path:
+  value: runs/ae_tb_full_kl_1.0e-5_zchannels_3/20251003-125631/ckpts/last.flax
+ae_config_path:
+  value: runs/ae_tb_full_kl_1.0e-5_zchannels_3/20251003-125631/run_meta.json
+epochs:
+  value: 50
+ldm_base_ch:
+  value: 128
+log_every:
+  value: 5
+lr:
+  value: 0.00018003149464081036
+overfit_k:
+  value: 16
+overfit_one:
+  value: false
+sample_batch_size:
+  value: 16
+sample_every:
+  value: 5
+task:
+  value: TB
+wandb:
+  value: 1
+weight_decay:
+  value: 0.07765234325230208

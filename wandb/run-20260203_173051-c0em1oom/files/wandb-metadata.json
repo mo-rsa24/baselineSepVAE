@@ -1,0 +1,89 @@
+{
+  "os": "Linux-5.15.0-43-generic-x86_64-with-glibc2.35",
+  "python": "3.11.14",
+  "startedAt": "2026-02-03T15:30:51.430440Z",
+  "args": [
+    "--use_fpn",
+    "--fpn_channels",
+    "512",
+    "--unfreeze_from",
+    "layer3",
+    "--upsample_method",
+    "bilinear",
+    "--batch_size",
+    "8",
+    "--lr_vae",
+    "6.7e-5",
+    "--lr_backbone",
+    "6.7e-6",
+    "--lr_patch_disc",
+    "5.3e-4",
+    "--free_bits",
+    "1.0",
+    "--weight_perceptual",
+    "0.1",
+    "--weight_adversarial",
+    "0.1",
+    "--disc_start_epoch",
+    "10",
+    "--kl_warmup_epochs",
+    "30",
+    "--weight_kl_common",
+    "1e-5",
+    "--weight_kl_disease",
+    "1e-5",
+    "--sigma_inactive",
+    "0.1",
+    "--epochs",
+    "200",
+    "--save_every",
+    "10",
+    "--sample_every",
+    "5",
+    "--exp_name",
+    "sepvae_rtx8000_bs8",
+    "--wandb"
+  ],
+  "program": "-m run.train_sep_vae",
+  "git": {
+    "remote": "git@github.com:mo-rsa24/superdiff-ldm.git",
+    "commit": "7abea3f97771f4d870fccf57bf99bd37f0be1543"
+  },
+  "email": "1858893@students.wits.ac.za",
+  "root": "/home-mscluster/mmolefe/Playground/PhD/superdiff-ldm",
+  "host": "mscluster106.ms.wits.ac.za",
+  "username": "mmolefe",
+  "executable": "/home-mscluster/mmolefe/miniforge3/envs/jaxstack/bin/python3",
+  "cpu_count": 56,
+  "cpu_count_logical": 112,
+  "gpu": "[Quadro RTX 8000, Quadro RTX 8000]",
+  "gpu_count": 2,
+  "disk": {
+    "/": {
+      "total": "501809635328",
+      "used": "168706531328"
+    }
+  },
+  "memory": {
+    "total": "1080768438272"
+  },
+  "cpu": {
+    "count": 56,
+    "countLogical": 112
+  },
+  "gpu_nvidia": [
+    {
+      "name": "Quadro RTX 8000",
+      "memoryTotal": "51539607552",
+      "cudaCores": 4608,
+      "architecture": "Turing"
+    },
+    {
+      "name": "Quadro RTX 8000",
+      "memoryTotal": "51539607552",
+      "cudaCores": 4608,
+      "architecture": "Turing"
+    }
+  ],
+  "cudaVersion": "12.7"
+}

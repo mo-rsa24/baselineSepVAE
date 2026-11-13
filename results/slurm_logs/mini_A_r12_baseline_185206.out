@@ -1,0 +1,8 @@
+Repo root: /var/lib/slurm/slurmd
+========================================
+SLURM job  : 185206
+Node       : mscluster43.ms.wits.ac.za
+GPU        : NVIDIA GeForce RTX 3090
+Launcher   : /home-mscluster/mmolefe/Playground/PhD/miniSepVAE/launchers/single_runs/mini_vae/exp_A_r12_baseline.sh
+Start time : Sat Mar 14 07:10:03 PM SAST 2026
+========================================

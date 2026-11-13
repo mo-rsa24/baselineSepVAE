@@ -1,0 +1,39 @@
+# This sweep searches for the best LR, WD, and model size when
+# overfitting on a single image.
+
+program: run/ldm.py
+method: random
+metric:
+  name: sample_diversity/metrics/pairwise_mse_mean
+  goal: maximize
+
+parameters:
+  # --- Varied Hyperparameters (What we are searching for) ---
+  lr:
+    distribution: log_uniform_values
+    min: 0.00001
+    max: 0.0005
+  weight_decay:
+    distribution: uniform
+    min: 0.0
+    max: 0.1
+  ldm_base_ch:
+    values: [96, 128]
+
+  # --- Fixed Parameters (The context for this experiment) ---
+  task:
+    value: "TB"
+  overfit_k:
+    value: 0
+  overfit_one:
+    value: true # Enable overfitting on one sample
+  epochs:
+    value: 1000
+  log_every:
+    value: 10
+  sample_every:
+    value: 5
+  sample_batch_size:
+    value: 1
+  wandb:
+    value: 1 # W&B is typically off for this quick diagnostic

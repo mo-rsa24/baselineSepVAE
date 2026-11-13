@@ -1,0 +1,6 @@
+E0314 19:03:52.378371 3516621 hlo_lexer.cc:443] Failed to parse int literal: 19661042864605151615
+/home-mscluster/mmolefe/miniforge3/envs/jaxstack/lib/python3.11/multiprocessing/popen_fork.py:66: RuntimeWarning: os.fork() was called. os.fork() is incompatible with multithreaded code, and JAX is multithreaded, so this will likely lead to a deadlock.
+  self.pid = os.fork()
+Blank/uniform image rejected (std=0.0000): /datasets/mmolefe/vinbigdata/train/b41de357cd8bbef33ae563b6299f802c.dicom
+Retry 1/10 for Cardiomegaly pool (corrupt: b41de357cd8bbef33ae563b6299f802c)
+slurmstepd-mscluster43: error: *** JOB 185205 ON mscluster43 CANCELLED AT 2026-03-14T19:10:01 ***

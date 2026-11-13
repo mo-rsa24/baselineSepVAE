@@ -1,0 +1,15 @@
+E0314 18:49:06.472080 3514743 hlo_lexer.cc:443] Failed to parse int literal: 19661042864605151615
+/home-mscluster/mmolefe/miniforge3/envs/jaxstack/lib/python3.11/multiprocessing/popen_fork.py:66: RuntimeWarning: os.fork() was called. os.fork() is incompatible with multithreaded code, and JAX is multithreaded, so this will likely lead to a deadlock.
+  self.pid = os.fork()
+Blank/uniform image rejected (std=0.0000): /datasets/mmolefe/vinbigdata/train/b41de357cd8bbef33ae563b6299f802c.dicom
+Retry 1/10 for Cardiomegaly pool (corrupt: b41de357cd8bbef33ae563b6299f802c)
+Traceback (most recent call last):
+  File "/home-mscluster/mmolefe/Playground/PhD/miniSepVAE/run/train_mini_sepvae.py", line 642, in <module>
+    main()
+  File "/home-mscluster/mmolefe/Playground/PhD/miniSepVAE/run/train_mini_sepvae.py", line 514, in main
+    ) = train_step(
+        ^^^^^^^^^^^
+TypeError: Error interpreting argument to <function make_train_step.<locals>.train_step at 0x7f297c455800> as an abstract array. The problematic value is of type <class 'torch.Tensor'> and was passed to the function at path batch['bbox_disease1'].
+This typically means that a jit-wrapped function was called with a non-array argument, and this argument was not marked as static using the static_argnums or static_argnames parameters of jax.jit.
+--------------------
+For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.

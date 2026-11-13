@@ -1,0 +1,154 @@
+_wandb:
+    value:
+        cli_version: 0.18.1
+        m: []
+        python_version: 3.11.14
+        t:
+            "1":
+                - 1
+                - 5
+                - 12
+                - 45
+                - 51
+                - 53
+                - 55
+                - 105
+            "2":
+                - 1
+                - 5
+                - 12
+                - 41
+                - 45
+                - 51
+                - 53
+                - 55
+                - 105
+            "3":
+                - 2
+                - 13
+                - 16
+                - 23
+                - 55
+                - 61
+            "4": 3.11.14
+            "5": 0.18.1
+            "8":
+                - 5
+            "12": 0.18.1
+            "13": linux-x86_64
+batch_size:
+    value: 10
+chess_checkpoint:
+    value: /datasets/mmolefe/chess/pretrained_weights.pth.tar
+chess_converted:
+    value: null
+csv_path:
+    value: /datasets/mmolefe/vinbigdata/train.csv
+dicom_dir:
+    value: /datasets/mmolefe/vinbigdata/train
+disc_start_epoch:
+    value: 10
+disent_eval_on_sample:
+    value: false
+disent_metrics_every:
+    value: 5
+disent_metrics_max_samples:
+    value: 600
+epochs:
+    value: 100
+exclude_cross_disease_overlap:
+    value: true
+exp_name:
+    value: sepvae_independence_driven
+fpn_channels:
+    value: 512
+free_bits:
+    value: 2
+frozen_backbone:
+    value: true
+grad_clip:
+    value: 1
+gradient_checkpointing:
+    value: true
+half_precision:
+    value: bf16
+img_size:
+    value: 512
+kl_warmup_epochs:
+    value: 10
+log_every:
+    value: 100
+lr_backbone:
+    value: 1e-05
+lr_disc:
+    value: 0.0001
+lr_patch_disc:
+    value: 0.0004
+lr_vae:
+    value: 0.0001
+manifold_every:
+    value: 5
+manifold_max_samples:
+    value: 600
+manifold_method:
+    value: pca
+n_samples_per_class:
+    value: 4
+num_workers:
+    value: 8
+output_root:
+    value: runs_sepvae
+overlap_eval_batch_size:
+    value: 16
+overlap_eval_samples:
+    value: 128
+resume:
+    value: null
+sample_every:
+    value: 5
+save_every:
+    value: 1
+seed:
+    value: 0
+sigma_inactive:
+    value: 0.1
+unfreeze_from:
+    value: layer4
+upsample_method:
+    value: bilinear
+use_fpn:
+    value: false
+verbose_backbone:
+    value: false
+verbose_n_samples:
+    value: 12
+wandb:
+    value: true
+wandb_entity:
+    value: null
+wandb_project:
+    value: sepvae-disentangle
+wandb_run_id:
+    value: null
+weight_adversarial:
+    value: 0
+weight_decay:
+    value: 0.0001
+weight_kl_common:
+    value: 0.0001
+weight_kl_disease:
+    value: 0.0001
+weight_mi:
+    value: 0.01
+weight_null:
+    value: 0.01
+weight_orthogonality:
+    value: 0.1
+weight_perceptual:
+    value: 0.05
+weight_rec:
+    value: 1
+z_channels_common:
+    value: 4
+z_channels_disease:
+    value: 2

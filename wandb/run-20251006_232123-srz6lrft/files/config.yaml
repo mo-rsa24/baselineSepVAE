@@ -1,0 +1,235 @@
+_wandb:
+    value:
+        cli_version: 0.21.3
+        e:
+            c88df5id273gx5js8zj80py67jns57i4:
+                args:
+                    - --data_root
+                    - /datasets/mmolefe/cleaned
+                    - --task
+                    - TB
+                    - --split
+                    - train
+                    - --img_size
+                    - "256"
+                    - --class_filter
+                    - "1"
+                    - --ae_ckpt_path
+                    - runs/ae_tb_full_kl_1.0e-5_zchannels_3/20251003-125631/ckpts/last.flax
+                    - --ae_config_path
+                    - runs/ae_tb_full_kl_1.0e-5_zchannels_3/20251003-125631/run_meta.json
+                    - --latent_scale_factor
+                    - "2.051733"
+                    - --ldm_base_ch
+                    - "128"
+                    - --ldm_ch_mults
+                    - 1,2,4,4
+                    - --ldm_num_res_blocks
+                    - "2"
+                    - --ldm_attn_res
+                    - 16,8
+                    - --lr
+                    - "2e-4"
+                    - --weight_decay
+                    - "0.0"
+                    - --grad_clip
+                    - "1.0"
+                    - --epochs
+                    - "200"
+                    - --batch_per_device
+                    - "8"
+                    - --seed
+                    - "42"
+                    - --sample_every
+                    - "5"
+                    - --log_every
+                    - "25"
+                    - --output_root
+                    - runs_ldm
+                    - --exp_name
+                    - cxr_ldm
+                    - --ldm_base_ch
+                    - "128"
+                    - --ldm_ch_mults
+                    - 1,2,4,4
+                    - --ldm_attn_res
+                    - 16,8
+                    - --overfit_k
+                    - "32"
+                    - --run_name
+                    - ldm_tb_overfit_32_fast_20251006-194151
+                    - --wandb
+                    - --wandb_project
+                    - cxr-ldm
+                    - --wandb_tags
+                    - ldm,tb,overfit-32,fast
+                codePath: run/ldm.py
+                codePathLocal: run/ldm.py
+                cpu_count: 14
+                cpu_count_logical: 28
+                cudaVersion: "12.7"
+                disk:
+                    /:
+                        total: "501809635328"
+                        used: "210297880576"
+                email: 1858893@students.wits.ac.za
+                executable: /home-mscluster/mmolefe/miniforge3/envs/jax115/bin/python
+                git:
+                    commit: 35a8a59b6d309c4690d76efd6f0bba722f164845
+                    remote: git@github.com:mo-rsa24/superdiff-ldm.git
+                gpu: NVIDIA GeForce RTX 3090
+                gpu_count: 1
+                gpu_nvidia:
+                    - architecture: Ampere
+                      cudaCores: 10496
+                      memoryTotal: "25769803776"
+                      name: NVIDIA GeForce RTX 3090
+                      uuid: GPU-b96c4122-90e1-e7e3-ee49-c945881418f4
+                host: mscluster68.ms.wits.ac.za
+                memory:
+                    total: "134775623680"
+                os: Linux-5.15.0-58-generic-x86_64-with-glibc2.35
+                program: /home-mscluster/mmolefe/Playground/PhD/superdiff-ldm/run/ldm.py
+                python: CPython 3.9.23
+                root: /home-mscluster/mmolefe/Playground/PhD/superdiff-ldm
+                slurm:
+                    cluster_name: mscluster
+                    conf: /etc/slurm/slurm.conf
+                    cpus_on_node: "28"
+                    distribution: cyclic
+                    gtids: "0"
+                    job_account: students
+                    job_cpus_per_node: "28"
+                    job_cpus_per_node_pack_group_0: "28"
+                    job_gid: "20337"
+                    job_id: "161444"
+                    job_name: cxr-ldm
+                    job_nodelist: mscluster68
+                    job_num_nodes: "1"
+                    job_partition: bigbatch
+                    job_qos: normal
+                    job_uid: "20337"
+                    job_user: mmolefe
+                    jobid: "161444"
+                    launch_node_ipaddr: 10.100.14.68
+                    localid: "0"
+                    nnodes: "1"
+                    node_aliases: (null)
+                    nodeid: "0"
+                    nodelist: mscluster68
+                    nprocs: "1"
+                    ntasks: "1"
+                    prio_process: "0"
+                    procid: "0"
+                    restart_count: "3"
+                    srun_comm_host: 10.100.14.68
+                    srun_comm_port: "45611"
+                    step_id: "0"
+                    step_launcher_port: "45611"
+                    step_nodelist: mscluster68
+                    step_num_nodes: "1"
+                    step_num_tasks: "1"
+                    step_tasks_per_node: "1"
+                    stepid: "0"
+                    submit_dir: /home-mscluster/mmolefe/Playground/PhD/superdiff-ldm
+                    submit_host: mscluster-login1.ms.wits.ac.za
+                    task_pid: "228594"
+                    tasks_per_node: "1"
+                    topology_addr: mscluster68
+                    topology_addr_pattern: node
+                    umask: "0022"
+                    working_cluster: mscluster:10.100.14.254:6817:9472:102
+                startedAt: "2025-10-06T21:21:23.684917Z"
+                writerId: c88df5id273gx5js8zj80py67jns57i4
+        m: []
+        python_version: 3.9.23
+        t:
+            "1":
+                - 1
+                - 2
+                - 3
+                - 12
+                - 41
+                - 45
+                - 51
+                - 105
+            "2":
+                - 1
+                - 2
+                - 3
+                - 12
+                - 41
+                - 45
+                - 51
+                - 105
+            "3":
+                - 2
+                - 13
+                - 15
+                - 16
+            "4": 3.9.23
+            "5": 0.21.3
+            "12": 0.21.3
+            "13": linux-x86_64
+ae_ckpt_path:
+    value: runs/ae_tb_full_kl_1.0e-5_zchannels_3/20251003-125631/ckpts/last.flax
+ae_config_path:
+    value: runs/ae_tb_full_kl_1.0e-5_zchannels_3/20251003-125631/run_meta.json
+batch_per_device:
+    value: 8
+class_filter:
+    value: 1
+data_root:
+    value: /datasets/mmolefe/cleaned
+epochs:
+    value: 200
+exp_name:
+    value: cxr_ldm
+grad_clip:
+    value: 1
+img_size:
+    value: 256
+latent_scale_factor:
+    value: 2.051733
+ldm_attn_res:
+    value: 16,8
+ldm_base_ch:
+    value: 128
+ldm_ch_mults:
+    value: 1,2,4,4
+ldm_num_res_blocks:
+    value: 2
+log_every:
+    value: 25
+lr:
+    value: 0.0002
+output_root:
+    value: runs_ldm
+overfit_k:
+    value: 32
+overfit_one:
+    value: false
+repeat_len:
+    value: 500
+resume_dir:
+    value: null
+run_name:
+    value: ldm_tb_overfit_32_fast_20251006-194151
+sample_batch_size:
+    value: 16
+sample_every:
+    value: 5
+seed:
+    value: 42
+split:
+    value: train
+task:
+    value: TB
+wandb:
+    value: true
+wandb_project:
+    value: cxr-ldm
+wandb_tags:
+    value: ldm,tb,overfit-32,fast
+weight_decay:
+    value: 0

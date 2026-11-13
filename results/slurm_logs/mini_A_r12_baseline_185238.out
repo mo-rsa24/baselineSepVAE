@@ -1,0 +1,74 @@
+Repo root: /var/lib/slurm/slurmd
+========================================
+SLURM job  : 185238
+Node       : mscluster43.ms.wits.ac.za
+GPU        : NVIDIA GeForce RTX 3090
+Launcher   : /home-mscluster/mmolefe/Playground/PhD/miniSepVAE/launchers/single_runs/mini_vae/exp_A_r12_baseline.sh
+Start time : Sun Mar 15 04:37:42 AM SAST 2026
+========================================
+[VinBigData] Loaded 13240 valid IDs from cache (valid_ids_cache.json).
+[VinBigData Dataset Initialized]
+  Normal: 10606 images
+  Cardiomegaly: 1950 images (2300 with bbox)
+  Pleural Effusion: 684 images (1032 with bbox)
+  Cross-disease overlap filtering: enabled
+    Removed from Cardiomegaly pool: 350
+    Removed from Effusion pool: 348
+  Total triplets: 684
+MiniSepVAE params: 2,244,401
+[  1/50] loss=5.3512  rec=0.0366  probe_c=0.591  probe_e=0.531  xhead=0.491  G1=✗  G2=✓
+[  2/50] loss=1.8660  rec=0.0182  probe_c=0.554  probe_e=0.508  xhead=0.545  G1=✗  G2=✓
+[  3/50] loss=1.4259  rec=0.0168  probe_c=0.565  probe_e=0.486  xhead=0.576  G1=✗  G2=✓
+[  4/50] loss=1.5265  rec=0.0168  probe_c=0.567  probe_e=0.644  xhead=0.609  G1=✗  G2=✓
+[  5/50] loss=1.5806  rec=0.0169  probe_c=0.533  probe_e=0.537  xhead=0.597  G1=✗  G2=✓
+[  6/50] loss=1.4496  rec=0.0169  probe_c=0.484  probe_e=0.527  xhead=0.592  G1=✗  G2=✓
+[  7/50] loss=1.3270  rec=0.0165  probe_c=0.517  probe_e=0.441  xhead=0.627  G1=✗  G2=✓
+[  8/50] loss=1.2366  rec=0.0159  probe_c=0.527  probe_e=0.600  xhead=0.552  G1=✗  G2=✓
+[  9/50] loss=1.1526  rec=0.0155  probe_c=0.618  probe_e=0.508  xhead=0.532  G1=✗  G2=✓
+[ 10/50] loss=1.1010  rec=0.0161  probe_c=0.540  probe_e=0.536  xhead=0.588  G1=✗  G2=✓
+[ 11/50] loss=1.0431  rec=0.0152  probe_c=0.562  probe_e=0.494  xhead=0.549  G1=✗  G2=✓
+[ 12/50] loss=0.9934  rec=0.0149  probe_c=0.563  probe_e=0.569  xhead=0.579  G1=✗  G2=✓
+[ 13/50] loss=0.9590  rec=0.0148  probe_c=0.532  probe_e=0.549  xhead=0.571  G1=✗  G2=✓
+[ 14/50] loss=0.9329  rec=0.0147  probe_c=0.548  probe_e=0.497  xhead=0.518  G1=✗  G2=✓
+[ 15/50] loss=0.9023  rec=0.0150  probe_c=0.586  probe_e=0.649  xhead=0.560  G1=✗  G2=✓
+[ 16/50] loss=0.9140  rec=0.0141  probe_c=0.511  probe_e=0.570  xhead=0.518  G1=✗  G2=✓
+[ 17/50] loss=0.8653  rec=0.0142  probe_c=0.480  probe_e=0.497  xhead=0.564  G1=✗  G2=✓
+[ 18/50] loss=0.8344  rec=0.0146  probe_c=0.590  probe_e=0.515  xhead=0.444  G1=✗  G2=✓
+[ 19/50] loss=0.8221  rec=0.0213  probe_c=0.508  probe_e=0.384  xhead=0.545  G1=✗  G2=✓
+[ 20/50] loss=0.8117  rec=0.0183  probe_c=0.526  probe_e=0.512  xhead=0.504  G1=✗  G2=✓
+[ 21/50] loss=0.7924  rec=0.0169  probe_c=0.420  probe_e=0.564  xhead=0.548  G1=✗  G2=✓
+[ 22/50] loss=0.7808  rec=0.0157  probe_c=0.495  probe_e=0.501  xhead=0.479  G1=✗  G2=✓
+[ 23/50] loss=0.7599  rec=0.0157  probe_c=0.443  probe_e=0.509  xhead=0.525  G1=✗  G2=✓
+[ 24/50] loss=0.7604  rec=0.0146  probe_c=0.623  probe_e=0.450  xhead=0.525  G1=✗  G2=✓
+[ 25/50] loss=0.7469  rec=0.0140  probe_c=0.545  probe_e=0.475  xhead=0.511  G1=✗  G2=✓
+[ 26/50] loss=0.7423  rec=0.0140  probe_c=0.585  probe_e=0.483  xhead=0.498  G1=✗  G2=✓
+[ 27/50] loss=0.7282  rec=0.0135  probe_c=0.621  probe_e=0.502  xhead=0.542  G1=✗  G2=✓
+[ 28/50] loss=0.7100  rec=0.0129  probe_c=0.391  probe_e=0.605  xhead=0.490  G1=✗  G2=✓
+[ 29/50] loss=0.6976  rec=0.0127  probe_c=0.596  probe_e=0.499  xhead=0.507  G1=✗  G2=✓
+[ 30/50] loss=0.7099  rec=0.0128  probe_c=0.574  probe_e=0.518  xhead=0.563  G1=✗  G2=✓
+[ 31/50] loss=0.6843  rec=0.0120  probe_c=0.638  probe_e=0.545  xhead=0.607  G1=✗  G2=✓
+[ 32/50] loss=0.7188  rec=0.0117  probe_c=0.585  probe_e=0.650  xhead=0.645  G1=✗  G2=✓
+[ 33/50] loss=0.6855  rec=0.0114  probe_c=0.499  probe_e=0.449  xhead=0.587  G1=✗  G2=✓
+[ 34/50] loss=0.6684  rec=0.0113  probe_c=0.542  probe_e=0.588  xhead=0.608  G1=✗  G2=✓
+[ 35/50] loss=0.6508  rec=0.0110  probe_c=0.596  probe_e=0.461  xhead=0.627  G1=✗  G2=✓
+[ 36/50] loss=0.6613  rec=0.0108  probe_c=0.575  probe_e=0.702  xhead=0.648  G1=✗  G2=✓
+[ 37/50] loss=0.6721  rec=0.0109  probe_c=0.600  probe_e=0.521  xhead=0.558  G1=✗  G2=✓
+[ 38/50] loss=0.6634  rec=0.0105  probe_c=0.661  probe_e=0.515  xhead=0.621  G1=✗  G2=✓
+[ 39/50] loss=0.6925  rec=0.0102  probe_c=0.647  probe_e=0.585  xhead=0.576  G1=✗  G2=✓
+[ 40/50] loss=0.6696  rec=0.0102  probe_c=0.589  probe_e=0.398  xhead=0.601  G1=✗  G2=✓
+[ 41/50] loss=0.7179  rec=0.0099  probe_c=0.591  probe_e=0.430  xhead=0.577  G1=✗  G2=✓
+[ 42/50] loss=0.6613  rec=0.0099  probe_c=0.663  probe_e=0.439  xhead=0.624  G1=✗  G2=✓
+[ 43/50] loss=0.6519  rec=0.0098  probe_c=0.641  probe_e=0.548  xhead=0.554  G1=✗  G2=✓
+[ 44/50] loss=0.6624  rec=0.0100  probe_c=0.645  probe_e=0.556  xhead=0.590  G1=✗  G2=✓
+[ 45/50] loss=0.6528  rec=0.0097  probe_c=0.504  probe_e=0.417  xhead=0.558  G1=✗  G2=✓
+[ 46/50] loss=0.6699  rec=0.0096  probe_c=0.551  probe_e=0.672  xhead=0.601  G1=✗  G2=✓
+[ 47/50] loss=0.6413  rec=0.0094  probe_c=0.495  probe_e=0.624  xhead=0.559  G1=✗  G2=✓
+[ 48/50] loss=0.6179  rec=0.0094  probe_c=0.531  probe_e=0.379  xhead=0.571  G1=✗  G2=✓
+[ 49/50] loss=0.6579  rec=0.0094  probe_c=0.606  probe_e=0.475  xhead=0.562  G1=✗  G2=✓
+[ 50/50] loss=0.6162  rec=0.0088  probe_c=0.516  probe_e=0.619  xhead=0.577  G1=✗  G2=✓
+
+Training complete.
+Run saved to: runs_mini_sepvae/mini_A_r12_baseline-20260315-043756
+========================================
+Finished   : Sun Mar 15 12:40:31 PM SAST 2026
+========================================

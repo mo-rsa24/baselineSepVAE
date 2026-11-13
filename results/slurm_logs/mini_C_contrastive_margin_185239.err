@@ -1,0 +1,5 @@
+E0315 04:58:18.312893 3918681 hlo_lexer.cc:443] Failed to parse int literal: 19661042864605151615
+/home-mscluster/mmolefe/miniforge3/envs/jaxstack/lib/python3.11/multiprocessing/popen_fork.py:66: RuntimeWarning: os.fork() was called. os.fork() is incompatible with multithreaded code, and JAX is multithreaded, so this will likely lead to a deadlock.
+  self.pid = os.fork()
+/home-mscluster/mmolefe/miniforge3/envs/jaxstack/lib/python3.11/multiprocessing/popen_fork.py:66: RuntimeWarning: os.fork() was called. os.fork() is incompatible with multithreaded code, and JAX is multithreaded, so this will likely lead to a deadlock.
+  self.pid = os.fork()

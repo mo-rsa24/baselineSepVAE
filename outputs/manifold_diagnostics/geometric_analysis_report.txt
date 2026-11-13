@@ -1,0 +1,55 @@
+======================================================================
+GEOMETRIC ANALYSIS REPORT
+======================================================================
+
+Question: Do Mono AND and SuperDiff AND agree on where the
+          semantic intersection lies?
+
+--- PCA ---
+  Base concept distance (Dog <-> Cat): 4.908
+  Mono AND distance to midpoint:      1.516
+  SuperDiff AND distance to midpoint: 7.048
+  Agreement (Mono AND <-> SD AND):    6.869
+  Agreement (normalized):             1.399
+  Interpretation: WEAK AGREEMENT - methods diverge significantly
+
+--- t-SNE ---
+  Base concept distance (Dog <-> Cat): 0.001
+  Mono AND distance to midpoint:      0.003
+  SuperDiff AND distance to midpoint: 0.009
+  Agreement (Mono AND <-> SD AND):    0.011
+  Agreement (normalized):             7.617
+  Interpretation: WEAK AGREEMENT - methods diverge significantly
+
+--- UMAP ---
+  Base concept distance (Dog <-> Cat): 0.154
+  Mono AND distance to midpoint:      0.475
+  SuperDiff AND distance to midpoint: 0.279
+  Agreement (Mono AND <-> SD AND):    0.525
+  Agreement (normalized):             3.409
+  Interpretation: WEAK AGREEMENT - methods diverge significantly
+
+======================================================================
+INTERPRETATION GUIDE
+======================================================================
+
+1. If BOTH methods land NEAR the linear midpoint:
+   -> Composition acts as simple averaging/interpolation
+   -> Both find the same 'intersection' in latent space
+
+2. If Mono AND is near midpoint but SuperDiff is NOT:
+   -> CLIP-based composition interpolates embeddings
+   -> SuperDiff explores different manifold regions
+   -> SuperDiff may find off-manifold or novel intersections
+
+3. If SuperDiff is near midpoint but Mono AND is NOT:
+   -> CLIP prompt 'Dog and Cat' has distinct semantics
+   -> SuperDiff score composition approximates linear blend
+
+4. If NEITHER is near midpoint:
+   -> Both methods find semantic intersections
+   -> 'AND' means something beyond linear interpolation
+
+5. If agreement is LOW (normalized > 0.5):
+   -> Methods fundamentally disagree on composition
+   -> Worth investigating which produces better results

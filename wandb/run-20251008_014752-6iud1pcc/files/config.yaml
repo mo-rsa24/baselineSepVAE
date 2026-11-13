@@ -1,0 +1,144 @@
+_wandb:
+    value:
+        cli_version: 0.21.3
+        e:
+            g09dasp5wzmzi1miu2va1qjduz4ghe3a:
+                args:
+                    - --ae_ckpt_path=runs/ae_tb_full_kl_1.0e-5_zchannels_3/20251003-125631/ckpts/last.flax
+                    - --ae_config_path=runs/ae_tb_full_kl_1.0e-5_zchannels_3/20251003-125631/run_meta.json
+                    - --data_root=/datasets/mmolefe/cleaned
+                    - --epochs=50
+                    - --latent_scale_factor=1.951791
+                    - --ldm_base_ch=96
+                    - --log_every=5
+                    - --lr=0.0002234167700631736
+                    - --overfit_k=16
+                    - --overfit_one=False
+                    - --sample_batch_size=16
+                    - --sample_every=5
+                    - --task=TB
+                    - --wandb=1
+                    - --weight_decay=0.04341875547042563
+                codePath: run/ldm.py
+                codePathLocal: run/ldm.py
+                cpu_count: 14
+                cpu_count_logical: 28
+                cudaVersion: "12.7"
+                disk:
+                    /:
+                        total: "501809635328"
+                        used: "103675244544"
+                email: 1858893@students.wits.ac.za
+                executable: /home-mscluster/mmolefe/miniforge3/envs/jax115/bin/python
+                git:
+                    commit: ce233586b6020b2d5811c7c1a8c49882f87ef4dd
+                    remote: git@github.com:mo-rsa24/superdiff-ldm.git
+                gpu: NVIDIA GeForce RTX 3090
+                gpu_count: 1
+                gpu_nvidia:
+                    - architecture: Ampere
+                      cudaCores: 10496
+                      memoryTotal: "25769803776"
+                      name: NVIDIA GeForce RTX 3090
+                      uuid: GPU-2e2ea647-7bd5-0c70-d3c0-83ca492a9d2a
+                host: mscluster80.ms.wits.ac.za
+                memory:
+                    total: "134775603200"
+                os: Linux-5.15.0-58-generic-x86_64-with-glibc2.35
+                program: /home-mscluster/mmolefe/Playground/PhD/superdiff-ldm/run/ldm.py
+                python: CPython 3.9.23
+                root: /home-mscluster/mmolefe/Playground/PhD/superdiff-ldm
+                startedAt: "2025-10-07T23:47:52.931524Z"
+                writerId: g09dasp5wzmzi1miu2va1qjduz4ghe3a
+        m: []
+        python_version: 3.9.23
+        t:
+            "1":
+                - 1
+                - 2
+                - 3
+                - 12
+                - 41
+                - 45
+                - 51
+                - 105
+            "2":
+                - 1
+                - 2
+                - 3
+                - 12
+                - 41
+                - 45
+                - 51
+                - 105
+            "3":
+                - 2
+                - 13
+                - 14
+                - 16
+            "4": 3.9.23
+            "5": 0.21.3
+            "12": 0.21.3
+            "13": linux-x86_64
+ae_ckpt_path:
+    value: runs/ae_tb_full_kl_1.0e-5_zchannels_3/20251003-125631/ckpts/last.flax
+ae_config_path:
+    value: runs/ae_tb_full_kl_1.0e-5_zchannels_3/20251003-125631/run_meta.json
+batch_per_device:
+    value: 4
+class_filter:
+    value: 1
+data_root:
+    value: /datasets/mmolefe/cleaned
+epochs:
+    value: 50
+exp_name:
+    value: cxr_ldm
+grad_clip:
+    value: 1
+img_size:
+    value: 256
+latent_scale_factor:
+    value: 1.951791
+ldm_attn_res:
+    value: "16"
+ldm_base_ch:
+    value: 96
+ldm_ch_mults:
+    value: 1,2,4
+ldm_num_res_blocks:
+    value: 2
+log_every:
+    value: 5
+lr:
+    value: 0.0002234167700631736
+output_root:
+    value: runs_ldm
+overfit_k:
+    value: 16
+overfit_one:
+    value: false
+repeat_len:
+    value: 500
+resume_dir:
+    value: null
+run_name:
+    value: null
+sample_batch_size:
+    value: 16
+sample_every:
+    value: 5
+seed:
+    value: 42
+split:
+    value: train
+task:
+    value: TB
+wandb:
+    value: 1
+wandb_project:
+    value: cxr-ldm
+wandb_tags:
+    value: ""
+weight_decay:
+    value: 0.04341875547042563

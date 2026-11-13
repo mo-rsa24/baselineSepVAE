@@ -1,0 +1,24 @@
+wandb_version: 1
+
+epochs:
+  value: 50
+ldm_base_ch:
+  value: 96
+log_every:
+  value: 5
+lr:
+  value: 0.00017152213875491954
+overfit_k:
+  value: 16
+overfit_one:
+  value: false
+sample_batch_size:
+  value: 16
+sample_every:
+  value: 5
+task:
+  value: TB
+wandb:
+  value: 1
+weight_decay:
+  value: 0.09281507009565344

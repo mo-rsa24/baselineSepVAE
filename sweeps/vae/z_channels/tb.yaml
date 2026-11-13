@@ -1,0 +1,10 @@
+program: run/autoencoder.py
+method: grid
+metric:
+  name: val/recon_loss
+  goal: minimize
+parameters:
+  z_channels:
+    values: [1, 2, 3, 4, 5]
+  task:
+    value: "TB"

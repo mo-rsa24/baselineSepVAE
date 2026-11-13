@@ -1,0 +1,57 @@
+{
+  "axis_effusion": [
+    -0.06187208476741058,
+    0.13675777845456283,
+    -0.9624614372893978,
+    -0.22613521815394558
+  ],
+  "axis_cardiomegaly_orth": [
+    0.06851648288266213,
+    -0.981125704420114,
+    -0.16246688401856413,
+    0.07938737492084039
+  ],
+  "projection_origin": [
+    -0.0017837045535478474,
+    -0.0052239693734528764,
+    -0.009564397913137717,
+    -0.00038381756762863095
+  ],
+  "metrics": {
+    "n_samples_total": 1200,
+    "n_train": 840,
+    "n_test": 360,
+    "auc/effusion_axis_vs_non_effusion": 0.6175520833333333,
+    "auc/cardiomegaly_axis_vs_non_cardiomegaly": 0.777310924369748,
+    "leakage/effusion_axis_cross_disease_ratio": 1.2568813374794467,
+    "leakage/effusion_axis_normal_ratio": 0.9209239019693868,
+    "leakage/cardiomegaly_axis_cross_disease_ratio": 0.7980012687054383,
+    "leakage/cardiomegaly_axis_normal_ratio": 1.1718210563272426,
+    "axis/orthogonality_dot": 6.740849695370828e-17,
+    "axis/effusion_target_abs_mean": 0.0004469757367238508,
+    "axis/effusion_off_abs_mean": 0.0005618080306077095,
+    "axis/cardiomegaly_target_abs_mean": 0.0002343207372223353,
+    "axis/cardiomegaly_off_abs_mean": 0.00018699622560010425,
+    "axis/origin_norm": 0.011049727657963993,
+    "axis/pca_fallback": true,
+    "class_mean/normal_eff_axis": -6.555893137072737e-05,
+    "class_mean/normal_cardio_axis": -0.000191273253538207,
+    "class_mean/effusion_eff_axis": 0.00019097984814268255,
+    "class_mean/effusion_cardio_axis": 2.606391001769763e-05,
+    "class_mean/cardiomegaly_eff_axis": -0.00012705885403272314,
+    "class_mean/cardiomegaly_cardio_axis": 0.0001627315080301859,
+    "embed/tsne/silhouette": -0.029023870825767517,
+    "embed/tsne/n_samples": 500,
+    "embed/tsne/status": "ok",
+    "embed/umap/silhouette": -0.037362124770879745,
+    "embed/umap/n_samples": 500,
+    "embed/umap/status": "ok",
+    "embed/lda/silhouette": 0.024220515627130377,
+    "embed/lda/n_samples": 1200,
+    "embed/lda/status": "ok",
+    "embed/mds/silhouette": 0.0028411352440017527,
+    "embed/mds/n_samples": 500,
+    "embed/mds/status": "ok",
+    "embed/comparison_panel_path": "runs_sepvae/sepvae_disentangle-20260217-130658/supervised_axes_analysis/additional_embeddings_comparison.png"
+  }
+}

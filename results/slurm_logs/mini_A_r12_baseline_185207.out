@@ -1,0 +1,19 @@
+Repo root: /var/lib/slurm/slurmd
+========================================
+SLURM job  : 185207
+Node       : mscluster43.ms.wits.ac.za
+GPU        : NVIDIA GeForce RTX 3090
+Launcher   : /home-mscluster/mmolefe/Playground/PhD/miniSepVAE/launchers/single_runs/mini_vae/exp_A_r12_baseline.sh
+Start time : Sat Mar 14 07:15:53 PM SAST 2026
+========================================
+[VinBigData] Pre-scanning 13242 unique DICOMs (first run; result will be cached)…
+  Scan complete. Dropped 2 corrupt/blank DICOMs. Cache saved → /datasets/mmolefe/vinbigdata/valid_ids_cache.json
+[VinBigData Dataset Initialized]
+  Normal: 10606 images
+  Cardiomegaly: 1950 images (2300 with bbox)
+  Pleural Effusion: 684 images (1032 with bbox)
+  Cross-disease overlap filtering: enabled
+    Removed from Cardiomegaly pool: 350
+    Removed from Effusion pool: 348
+  Total triplets: 684
+MiniSepVAE params: 2,244,401

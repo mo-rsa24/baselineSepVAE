@@ -1,0 +1,14 @@
+{
+  "data_root": "/home-mscluster/mmolefe/Playground/PhD/datasets/cleaned",
+  "task": "All_CXR",
+  "split": "train",
+  "img_size": 128,
+  "class_filter": null,
+  "ae_ckpt_path": "/home-mscluster/mmolefe/Playground/PhD/superdiff-ldm/runs/unified-ae-128-z4_z4_20251008-161725/20251008-170121/ckpts/last.flax",
+  "ae_config_path": "/home-mscluster/mmolefe/Playground/PhD/superdiff-ldm/runs/unified-ae-128-z4_z4_20251008-161725/20251008-170121/run_meta.json",
+  "latent_scale_factor": 0.997567979960659,
+  "num_samples": 2259,
+  "manifest_name": "manifest.jsonl",
+  "latents_dir": "latents",
+  "seed": 42
+}

@@ -1,0 +1,64 @@
+======================================================================
+EXTENDED MANIFOLD ANALYSIS: HYPOTHESIS TESTING REPORT
+======================================================================
+
+Configuration: 2 runs, 50 steps
+
+----------------------------------------------------------------------
+H1: SEMANTIC INTERSECTION LOCATION
+----------------------------------------------------------------------
+Hypothesis: CLIP AND and SuperDiff AND locate semantic intersections
+            at different points in latent space.
+
+  Semantic condition centroid distance: 103.154
+  Semantic overlap ratio: 0.335
+  Spatial condition centroid distance: 107.120
+  Spatial overlap ratio: 0.297
+
+  VERDICT: PARTIAL - Some divergence in intersection location
+
+----------------------------------------------------------------------
+H2: SPATIAL CONSTRAINTS AS MANIFOLD RESHAPING
+----------------------------------------------------------------------
+Hypothesis: Spatial constraints reshape local manifold geometry
+            rather than merely guiding decoding.
+
+  CLIP semantic LID: nan
+  CLIP spatial LID: nan
+
+----------------------------------------------------------------------
+H3: TRAJECTORY DIVERGENCE TIMING
+----------------------------------------------------------------------
+Hypothesis: Early divergence = different semantics
+            Late divergence = different decoding
+
+  Semantic divergence onset: timestep 10
+  Spatial divergence onset: timestep 10
+
+  VERDICT: PARTIAL - Similar divergence timing
+
+----------------------------------------------------------------------
+H4: OFF-MANIFOLD DRIFT
+----------------------------------------------------------------------
+Hypothesis: SuperDiff AND drifts further from data manifold than CLIP AND
+
+  CLIP AND reconstruction error: 19.027
+  SuperDiff AND reconstruction error: 16.922
+
+  VERDICT: NOT SUPPORTED - Similar manifold adherence
+
+----------------------------------------------------------------------
+H5/H6: KAPPA DYNAMICS REFLECT CONCEPT BALANCE
+----------------------------------------------------------------------
+Hypothesis: Kappa variance correlates with concept balance quality
+
+  Semantic κ mean: 0.564
+  Semantic κ variance: 0.127
+  Spatial κ mean: 0.532
+  Spatial κ variance: 0.152
+
+  OBSERVATION: Similar κ dynamics across conditions
+
+======================================================================
+END OF REPORT
+======================================================================

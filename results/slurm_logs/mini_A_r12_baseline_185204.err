@@ -1,0 +1,29 @@
+E0314 18:56:58.007078 3515606 hlo_lexer.cc:443] Failed to parse int literal: 19661042864605151615
+/home-mscluster/mmolefe/miniforge3/envs/jaxstack/lib/python3.11/multiprocessing/popen_fork.py:66: RuntimeWarning: os.fork() was called. os.fork() is incompatible with multithreaded code, and JAX is multithreaded, so this will likely lead to a deadlock.
+  self.pid = os.fork()
+Traceback (most recent call last):
+  File "/home-mscluster/mmolefe/miniforge3/envs/jaxstack/lib/python3.11/site-packages/jax/_src/core.py", line 895, in __getattr__
+    attr = getattr(self.aval, name)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'ShapedArray' object has no attribute 'apply'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home-mscluster/mmolefe/Playground/PhD/miniSepVAE/run/train_mini_sepvae.py", line 642, in <module>
+    main()
+  File "/home-mscluster/mmolefe/Playground/PhD/miniSepVAE/run/train_mini_sepvae.py", line 514, in main
+    ) = train_step(
+        ^^^^^^^^^^^
+  File "/home-mscluster/mmolefe/Playground/PhD/miniSepVAE/run/train_mini_sepvae.py", line 217, in train_step
+    (vae_loss, (logs, mi_disc_loss, _, cross_disc_loss)), grads = jax.value_and_grad(
+                                                                  ^^^^^^^^^^^^^^^^^^^
+  File "/home-mscluster/mmolefe/Playground/PhD/miniSepVAE/run/train_mini_sepvae.py", line 169, in vae_loss_fn
+    total, (logs, mi_disc_loss, patch_disc_loss, cross_disc_loss) = sepvae_loss(
+                                                                    ^^^^^^^^^^^^
+  File "/home-mscluster/mmolefe/Playground/PhD/miniSepVAE/losses/sep_vae_losses.py", line 1110, in sepvae_loss
+    x_rec, latents_dict, inactive_mus = model.apply(
+                                        ^^^^^^^^^^^
+AttributeError: DynamicJaxprTracer has no attribute apply
+--------------------
+For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.

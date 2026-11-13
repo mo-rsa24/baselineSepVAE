@@ -1,0 +1,93 @@
+{
+  "os": "Linux-5.15.0-58-generic-x86_64-with-glibc2.35",
+  "python": "3.11.14",
+  "startedAt": "2026-01-17T10:36:28.380381Z",
+  "args": [
+    "--data_root",
+    "/home-mscluster/mmolefe/Playground/PhD/datasets/cleaned",
+    "--task",
+    "TB",
+    "--split",
+    "train",
+    "--img_size",
+    "256",
+    "--class_filter",
+    "0",
+    "--ae_ckpt_path",
+    "/home-mscluster/mmolefe/cluster_staging/unified-ae-proto-eb7c6d6_20260112-063726/runs/unified-ae-proto-increase-ae-autoencoder-eb7c6d6-20260112-063726/20260112-063740/ckpts/last.flax",
+    "--ae_config_path",
+    "/home-mscluster/mmolefe/cluster_staging/unified-ae-proto-eb7c6d6_20260112-063726/runs/unified-ae-proto-increase-ae-autoencoder-eb7c6d6-20260112-063726/20260112-063740/run_meta.json",
+    "--latent_scale_factor",
+    "0.999373",
+    "--ldm_base_ch",
+    "64",
+    "--ldm_ch_mults",
+    "1,2",
+    "--ldm_num_res_blocks",
+    "1",
+    "--ldm_attn_res",
+    "8",
+    "--lr",
+    "1e-4",
+    "--weight_decay",
+    "1e-4",
+    "--grad_clip",
+    "1.0",
+    "--epochs",
+    "20",
+    "--batch_per_device",
+    "4",
+    "--seed",
+    "42",
+    "--sample_every",
+    "1",
+    "--log_every",
+    "1",
+    "--output_root",
+    "runs_ldm_debug",
+    "--exp_name",
+    "local_smoke_test",
+    "--overfit_one",
+    "--repeat_len",
+    "100",
+    "--wandb"
+  ],
+  "program": "/home-mscluster/mmolefe/Playground/PhD/superdiff-ldm/run/ldm.py",
+  "codePath": "run/ldm.py",
+  "git": {
+    "remote": "git@github.com:mo-rsa24/superdiff-ldm.git",
+    "commit": "43ed5cad8b4e21177e44e51e5d89760225280509"
+  },
+  "email": "1858893@students.wits.ac.za",
+  "root": "/home-mscluster/mmolefe/Playground/PhD/superdiff-ldm",
+  "host": "mscluster81.ms.wits.ac.za",
+  "username": "mmolefe",
+  "executable": "/home-mscluster/mmolefe/miniforge3/envs/jaxstack/bin/python",
+  "codePathLocal": "run/ldm.py",
+  "cpu_count": 14,
+  "cpu_count_logical": 28,
+  "gpu": "[NVIDIA GeForce RTX 3090]",
+  "gpu_count": 1,
+  "disk": {
+    "/": {
+      "total": "501809635328",
+      "used": "106792374272"
+    }
+  },
+  "memory": {
+    "total": "134775619584"
+  },
+  "cpu": {
+    "count": 14,
+    "countLogical": 28
+  },
+  "gpu_nvidia": [
+    {
+      "name": "NVIDIA GeForce RTX 3090",
+      "memoryTotal": "25769803776",
+      "cudaCores": 10496,
+      "architecture": "Ampere"
+    }
+  ],
+  "cudaVersion": "12.7"
+}

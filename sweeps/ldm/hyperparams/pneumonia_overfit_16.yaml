@@ -1,0 +1,36 @@
+program: run/ldm.py
+method: random
+metric:
+  name: sample_diversity/metrics/pairwise_mse_mean
+  goal: maximize
+
+parameters:
+  # --- Varied Hyperparameters (What we are searching for) ---
+  lr:
+    distribution: log_uniform_values
+    min: 0.00001
+    max: 0.0005
+  weight_decay:
+    distribution: uniform
+    min: 0.0
+    max: 0.1
+  ldm_base_ch:
+    values: [96, 128]
+
+  # --- Fixed Parameters (The context for this experiment) ---
+  task:
+    value: "PNEUMONIA"
+  overfit_k:
+    value: 16
+  overfit_one:
+    value: false
+  epochs:
+    value: 50
+  log_every:
+    value: 5
+  sample_every:
+    value: 5
+  sample_batch_size:
+    value: 16
+  wandb:
+    value: 1 # This is passed as an env var to the slurm script

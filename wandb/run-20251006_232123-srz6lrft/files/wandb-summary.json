@@ -1,0 +1,1 @@
+{"_runtime":26183,"train/loss":0.7581877708435059,"train/step":775,"_timestamp":1.7598118548483477e+09,"_step":71,"samples":{"_type":"image-file","sha256":"8cbbc0b881efa45531bdfb220f5e77ac3ac90022775314b5a5e4a317bdf9bc9e","size":758891,"path":"media/images/samples_71_8cbbc0b881efa45531bd.png","format":"png","width":1034,"height":1034},"epoch":200,"_wandb":{"runtime":26183}}

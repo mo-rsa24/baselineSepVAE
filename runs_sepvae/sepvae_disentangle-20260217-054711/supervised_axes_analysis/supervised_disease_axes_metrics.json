@@ -1,0 +1,44 @@
+{
+  "axis_effusion": [
+    -0.07705811879938623,
+    0.6484667863093283,
+    -0.6385245169219789,
+    -0.4072337346909084
+  ],
+  "axis_cardiomegaly_orth": [
+    0.6495613855037533,
+    -0.5358006077795644,
+    -0.3755926305374472,
+    -0.38719231791379066
+  ],
+  "projection_origin": [
+    0.0021085473359562456,
+    -0.005122101306360925,
+    -0.004761423031422531,
+    -0.003601853786468772
+  ],
+  "metrics": {
+    "n_samples_total": 1200,
+    "n_train": 840,
+    "n_test": 360,
+    "auc/effusion_axis_vs_non_effusion": 0.6215104166666666,
+    "auc/cardiomegaly_axis_vs_non_cardiomegaly": 0.6378709160012552,
+    "leakage/effusion_axis_cross_disease_ratio": 1.0001908465979754,
+    "leakage/effusion_axis_normal_ratio": 0.7125219994270026,
+    "leakage/cardiomegaly_axis_cross_disease_ratio": 0.8881278687705808,
+    "leakage/cardiomegaly_axis_normal_ratio": 0.9751693064084002,
+    "axis/orthogonality_dot": 6.770340954157528e-17,
+    "axis/effusion_target_abs_mean": 0.00027021807356071337,
+    "axis/effusion_off_abs_mean": 0.0002702796456692299,
+    "axis/cardiomegaly_target_abs_mean": 0.00021143797462958646,
+    "axis/cardiomegaly_off_abs_mean": 0.00018779283906363045,
+    "axis/origin_norm": 0.00814410177022935,
+    "axis/pca_fallback": true,
+    "class_mean/normal_eff_axis": 5.48933063423148e-05,
+    "class_mean/normal_cardio_axis": -0.00011717768347823499,
+    "class_mean/effusion_eff_axis": 6.0626379084765937e-05,
+    "class_mean/effusion_cardio_axis": 5.062046359893512e-05,
+    "class_mean/cardiomegaly_eff_axis": -0.00011492241989641183,
+    "class_mean/cardiomegaly_cardio_axis": 6.333740061256543e-05
+  }
+}
